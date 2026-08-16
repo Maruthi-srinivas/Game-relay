@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # Game Chat Room Service
 
 Production-oriented real-time chat backend for multiplayer games. **V1** covers a single Spring Boot node with JWT auth, room management, raw JSON WebSockets, and PostgreSQL message persistence.
@@ -217,3 +218,7 @@ Unit tests cover JWT, registration hashing, room membership rules, and message v
 - Members connected to this node receive the message in real time
 - Messages are stored in PostgreSQL and returned by paginated history
 - Unauthorized room access is rejected on REST and WebSocket
+=======
+# Game-relay
+A real-time game communication backend exploring WebSockets, concurrent connections, chat rooms, player presence, message delivery, and scalable networking.
+>>>>>>> 48528318bceff2e8c84801d0de6432b4562b18d3
