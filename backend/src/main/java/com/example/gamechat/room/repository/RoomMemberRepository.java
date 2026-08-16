@@ -24,4 +24,13 @@ public interface RoomMemberRepository extends JpaRepository<RoomMember, RoomMemb
             order by m.joinedAt asc
             """)
     List<RoomMember> findWithUsersByRoomId(@Param("roomId") UUID roomId);
+
+    @Query("""
+            select m from RoomMember m
+            join fetch m.room r
+            join fetch r.owner
+            where m.id.userId = :userId
+            order by r.createdAt desc
+            """)
+    List<RoomMember> findWithRoomsByUserId(@Param("userId") UUID userId);
 }

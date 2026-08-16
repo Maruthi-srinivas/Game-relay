@@ -1,4 +1,3 @@
-<<<<<<< HEAD
 # Game Chat Room Service
 
 Production-oriented real-time chat backend for multiplayer games. **V1** covers a single Spring Boot node with JWT auth, room management, raw JSON WebSockets, and PostgreSQL message persistence.
@@ -16,11 +15,15 @@ cp .env.example .env
 docker compose up --build
 ```
 
-Wait until `chat-service` is healthy, then:
+Wait until `chat-service` is healthy, then open the two-pane playground at [http://localhost:8081](http://localhost:8081) or:
 
 ```bash
 curl http://localhost:8080/actuator/health
 ```
+
+The playground proxies `/api` and `/ws` through nginx on port 8081. Direct API calls still use port 8080.
+
+Demo path: register User A → create a room → copy the room id → register User B → join that id → Connect on both panes → send a message. Live frames show up in each pane's traffic log.
 
 Stop with `docker compose down`. Data is kept in the `postgres_data` volume; add `-v` to wipe it.
 
@@ -39,6 +42,8 @@ Copy [`.env.example`](.env.example) and adjust as needed:
 Do not commit `.env` or production secrets.
 
 ## REST API
+
+Full request/response examples for every REST and WebSocket call are in [API.md](API.md).
 
 All endpoints except register/login require `Authorization: Bearer <token>`. Identity is taken from the JWT, never from a client-supplied sender id.
 
@@ -78,6 +83,9 @@ curl -s -X POST http://localhost:8080/api/rooms \
   -H "Content-Type: application/json" \
   -d "{\"name\":\"Arena\",\"type\":\"GAME_ROOM\"}"
 
+curl -s http://localhost:8080/api/rooms \
+  -H "Authorization: Bearer $TOKEN"
+
 curl -s http://localhost:8080/api/rooms/<roomId> \
   -H "Authorization: Bearer $TOKEN"
 
@@ -94,7 +102,7 @@ curl -s "http://localhost:8080/api/rooms/<roomId>/messages?page=0&size=20" \
   -H "Authorization: Bearer $TOKEN"
 ```
 
-History is newest-first. Non-members receive `403`. Missing rooms receive `404`. Duplicate username/email on register receives `409`.
+`GET /api/rooms` lists rooms the caller belongs to. History is newest-first. Non-members receive `403`. Missing rooms receive `404`. Duplicate username/email on register receives `409`.
 
 ## WebSocket protocol
 
@@ -194,7 +202,9 @@ backend/                 Spring Boot 3 / Java 21 application
     room/                 Room REST + membership
     chat/                 WebSocket handler, persistence, history
     common/               Errors and shared DTOs
-docker-compose.yml        chat-service + postgres
+frontend/                 Vanilla HTML/CSS/JS playground (nginx)
+  Dockerfile              nginx:alpine, static files + reverse proxy
+docker-compose.yml        frontend + chat-service + postgres
 ```
 
 ## Tests
@@ -207,18 +217,15 @@ docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v "%cd%":/app -w /
 
 On Linux/macOS replace `%cd%` with `$(pwd)`.
 
-Unit tests cover JWT, registration hashing, room membership rules, and message validation. The integration test covers REST auth/rooms/history and a two-client WebSocket broadcast that is persisted.
+Unit tests cover JWT, registration hashing, room membership rules (including listing a user's rooms), and message validation. The integration test covers REST auth/rooms/history and a two-client WebSocket broadcast that is persisted.
 
 ## V1 definition of done
 
 - `docker compose up --build` starts the stack with no host Java/Maven/Postgres install
+- Playground is available at `http://localhost:8081`
 - Register/login returns a JWT
-- Users can create, join, leave, and list room members
+- Users can list their rooms, create, join, leave, and list room members
 - An authenticated WebSocket can join a room and send a message
 - Members connected to this node receive the message in real time
 - Messages are stored in PostgreSQL and returned by paginated history
 - Unauthorized room access is rejected on REST and WebSocket
-=======
-# Game-relay
-A real-time game communication backend exploring WebSockets, concurrent connections, chat rooms, player presence, message delivery, and scalable networking.
->>>>>>> 48528318bceff2e8c84801d0de6432b4562b18d3

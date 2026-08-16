@@ -16,6 +16,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.lang.reflect.Method;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -106,6 +107,29 @@ class RoomServiceTest {
                 .isInstanceOf(ApiException.class)
                 .extracting(ex -> ((ApiException) ex).getCode())
                 .isEqualTo("FORBIDDEN");
+    }
+
+    @Test
+    void listForUserReturnsMembershipRooms() {
+        UUID roomId = UUID.randomUUID();
+        Room room = room(roomId);
+        RoomMember member = new RoomMember();
+        member.setRoom(room);
+        when(roomMemberRepository.findWithRoomsByUserId(ownerId)).thenReturn(List.of(member));
+
+        List<RoomResponse> rooms = roomService.listForUser(ownerId);
+
+        assertThat(rooms).hasSize(1);
+        assertThat(rooms.getFirst().id()).isEqualTo(roomId);
+        assertThat(rooms.getFirst().name()).isEqualTo("Arena");
+        assertThat(rooms.getFirst().ownerId()).isEqualTo(ownerId);
+    }
+
+    @Test
+    void listForUserReturnsEmptyWhenNoMemberships() {
+        when(roomMemberRepository.findWithRoomsByUserId(ownerId)).thenReturn(List.of());
+
+        assertThat(roomService.listForUser(ownerId)).isEmpty();
     }
 
     @Test

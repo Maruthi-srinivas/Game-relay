@@ -87,7 +87,43 @@ class ChatApplicationIT {
         assertThat(duplicate.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
 
         RoomResponse room = createRoom(alice.token(), "Arena");
+
+        ResponseEntity<RoomResponse[]> aliceRooms = exchange(
+                alice.token(),
+                HttpMethod.GET,
+                "/api/rooms",
+                null,
+                RoomResponse[].class
+        );
+        assertThat(aliceRooms.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(aliceRooms.getBody()).isNotNull();
+        assertThat(aliceRooms.getBody()).hasSize(1);
+        assertThat(aliceRooms.getBody()[0].id()).isEqualTo(room.id());
+
+        ResponseEntity<RoomResponse[]> carolRooms = exchange(
+                carol.token(),
+                HttpMethod.GET,
+                "/api/rooms",
+                null,
+                RoomResponse[].class
+        );
+        assertThat(carolRooms.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(carolRooms.getBody()).isNotNull();
+        assertThat(carolRooms.getBody()).isEmpty();
+
         joinRoom(bob.token(), room.id());
+
+        ResponseEntity<RoomResponse[]> bobRooms = exchange(
+                bob.token(),
+                HttpMethod.GET,
+                "/api/rooms",
+                null,
+                RoomResponse[].class
+        );
+        assertThat(bobRooms.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(bobRooms.getBody()).isNotNull();
+        assertThat(bobRooms.getBody()).hasSize(1);
+        assertThat(bobRooms.getBody()[0].id()).isEqualTo(room.id());
 
         ResponseEntity<RoomResponse> strangerGet = exchange(
                 carol.token(),

@@ -93,6 +93,13 @@ public class RoomService {
     }
 
     @Transactional(readOnly = true)
+    public List<RoomResponse> listForUser(UUID userId) {
+        return roomMemberRepository.findWithRoomsByUserId(userId).stream()
+                .map(member -> toResponse(member.getRoom()))
+                .toList();
+    }
+
+    @Transactional(readOnly = true)
     public List<MemberResponse> listMembers(UUID roomId, UUID userId) {
         requireMember(roomId, userId);
         return roomMemberRepository.findWithUsersByRoomId(roomId).stream()

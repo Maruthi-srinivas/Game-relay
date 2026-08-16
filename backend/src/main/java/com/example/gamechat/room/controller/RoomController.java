@@ -41,6 +41,11 @@ public class RoomController {
         return roomService.create(principal.userId(), request);
     }
 
+    @GetMapping
+    public List<RoomResponse> listMine(@AuthenticationPrincipal UserPrincipal principal) {
+        return roomService.listForUser(principal.userId());
+    }
+
     @GetMapping("/{roomId}")
     public RoomResponse get(
             @AuthenticationPrincipal UserPrincipal principal,

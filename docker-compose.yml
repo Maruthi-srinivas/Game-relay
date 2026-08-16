@@ -31,5 +31,12 @@ services:
     ports:
       - "8080:8080"
 
+  frontend:
+    build: ./frontend
+    depends_on:
+      - chat-service
+    ports:
+      - "8081:80"
+
 volumes:
   postgres_data:
