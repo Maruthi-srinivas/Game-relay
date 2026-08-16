@@ -1,0 +1,37 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: game-chat
+  datasource:
+    url: jdbc:postgresql://${POSTGRES_HOST:localhost}:${POSTGRES_PORT:5432}/${POSTGRES_DB:gamechat}
+    username: ${POSTGRES_USER:gamechat}
+    password: ${POSTGRES_PASSWORD:gamechat}
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: validate
+    properties:
+      hibernate:
+        jdbc:
+          time_zone: UTC
+  flyway:
+    enabled: true
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      show-details: never
+
+jwt:
+  secret: ${JWT_SECRET:change-me-to-a-long-random-secret-at-least-32-chars}
+  expiration-ms: ${JWT_EXPIRATION:86400000}
+
+app:
+  chat:
+    max-message-length: 2000
