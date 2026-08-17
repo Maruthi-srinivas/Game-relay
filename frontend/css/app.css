@@ -170,6 +170,22 @@ button:disabled { opacity: 0.45; cursor: not-allowed; }
 .room-item:hover, .room-item.active { background: #223044; }
 .room-item .id { color: var(--muted); }
 
+.member-item { display: flex; align-items: center; gap: 6px; }
+.presence {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #5a6573;
+  flex-shrink: 0;
+}
+.presence.on { background: var(--accent); }
+.typing {
+  color: var(--muted);
+  font-style: italic;
+  min-height: 1.2em;
+  margin-top: 4px;
+}
 .msg { margin-bottom: 4px; }
 .msg .from { color: var(--accent-2); font-weight: 600; }
 .msg.mine .from { color: var(--accent); }

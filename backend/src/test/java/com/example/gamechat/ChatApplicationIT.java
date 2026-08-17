@@ -32,6 +32,7 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 
 import java.net.URI;
 import java.time.Duration;
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.BlockingQueue;
@@ -199,17 +200,67 @@ class ChatApplicationIT {
             assertThat(aliceMessage.path("content").asText()).isEqualTo("Enemy approaching");
             assertThat(aliceMessage.path("senderId").asText()).isEqualTo(alice.userId().toString());
             assertThat(aliceMessage.path("messageId").asText()).isEqualTo(bobMessage.path("messageId").asText());
-            assertThat(aliceMessage.has("sequenceNumber")).isFalse();
+            assertThat(aliceMessage.path("sequenceNumber").asLong()).isEqualTo(1);
+            assertThat(bobMessage.path("sequenceNumber").asLong()).isEqualTo(1);
 
             ResponseEntity<PageResponse<MessageResponse>> history = history(bob.token(), room.id());
             assertThat(history.getStatusCode()).isEqualTo(HttpStatus.OK);
             assertThat(history.getBody()).isNotNull();
             assertThat(history.getBody().content()).hasSize(1);
             assertThat(history.getBody().content().getFirst().content()).isEqualTo("Enemy approaching");
+            assertThat(history.getBody().content().getFirst().sequenceNumber()).isEqualTo(1);
         } finally {
             aliceSession.close();
             bobSession.close();
             carolSession.close();
+        }
+    }
+
+    @Test
+    void websocketSyncsMissedMessages() throws Exception {
+        AuthResponse alice = register("sync_alice", "sync.alice@example.com");
+        AuthResponse bob = register("sync_bob", "sync.bob@example.com");
+        RoomResponse room = createRoom(alice.token(), "Sync Arena");
+        joinRoom(bob.token(), room.id());
+
+        CollectingHandler aliceHandler = new CollectingHandler();
+        WebSocketSession aliceSession = connect(alice.token(), aliceHandler);
+        try {
+            waitForType(aliceHandler, "CONNECTED");
+            aliceSession.sendMessage(joinPayload(room.id(), "req-join-a"));
+            waitForType(aliceHandler, "JOINED");
+            aliceSession.sendMessage(sendPayload(room.id(), "req-1", "missed while offline"));
+            waitForType(aliceHandler, "ACK");
+            assertThat(waitForType(aliceHandler, "MESSAGE").path("sequenceNumber").asLong()).isEqualTo(1);
+
+            CollectingHandler bobHandler = new CollectingHandler();
+            WebSocketSession bobSession = connect(bob.token(), bobHandler);
+            try {
+                waitForType(bobHandler, "CONNECTED");
+                bobSession.sendMessage(joinPayload(room.id(), "req-join-b", 0));
+                JsonNode sync = waitForType(bobHandler, "HISTORY_SYNC");
+                assertThat(sync.path("truncated").asBoolean()).isFalse();
+                assertThat(sync.path("messages")).hasSize(1);
+                assertThat(sync.path("messages").get(0).path("content").asText()).isEqualTo("missed while offline");
+                assertThat(sync.path("messages").get(0).path("sequenceNumber").asLong()).isEqualTo(1);
+                waitForType(bobHandler, "JOINED");
+
+                aliceSession.sendMessage(sendPayload(room.id(), "req-2", "live after sync"));
+                JsonNode bobLive = waitForType(bobHandler, "MESSAGE");
+                assertThat(bobLive.path("content").asText()).isEqualTo("live after sync");
+                assertThat(bobLive.path("sequenceNumber").asLong()).isEqualTo(2);
+
+                ResponseEntity<PageResponse<MessageResponse>> after = historyAfter(bob.token(), room.id(), 1);
+                assertThat(after.getStatusCode()).isEqualTo(HttpStatus.OK);
+                assertThat(after.getBody()).isNotNull();
+                assertThat(after.getBody().content()).hasSize(1);
+                assertThat(after.getBody().content().getFirst().content()).isEqualTo("live after sync");
+                assertThat(after.getBody().content().getFirst().sequenceNumber()).isEqualTo(2);
+            } finally {
+                bobSession.close();
+            }
+        } finally {
+            aliceSession.close();
         }
     }
 
@@ -259,6 +310,17 @@ class ChatApplicationIT {
         );
     }
 
+    private ResponseEntity<PageResponse<MessageResponse>> historyAfter(String token, UUID roomId, long afterSequence) {
+        HttpHeaders headers = bearer(token);
+        return rest.exchange(
+                "/api/rooms/" + roomId + "/messages?afterSequence=" + afterSequence + "&size=20",
+                HttpMethod.GET,
+                new HttpEntity<>(headers),
+                new ParameterizedTypeReference<PageResponse<MessageResponse>>() {
+                }
+        );
+    }
+
     private <T> ResponseEntity<T> exchange(
             String token,
             HttpMethod method,
@@ -286,10 +348,26 @@ class ChatApplicationIT {
     }
 
     private TextMessage joinPayload(UUID roomId, String requestId) throws Exception {
+        return joinPayload(roomId, requestId, null);
+    }
+
+    private TextMessage joinPayload(UUID roomId, String requestId, Integer afterSequence) throws Exception {
+        LinkedHashMap<String, Object> body = new LinkedHashMap<>();
+        body.put("type", "JOIN_ROOM");
+        body.put("requestId", requestId);
+        body.put("roomId", roomId.toString());
+        if (afterSequence != null) {
+            body.put("afterSequence", afterSequence);
+        }
+        return new TextMessage(objectMapper.writeValueAsString(body));
+    }
+
+    private TextMessage sendPayload(UUID roomId, String requestId, String content) throws Exception {
         return new TextMessage(objectMapper.writeValueAsString(Map.of(
-                "type", "JOIN_ROOM",
+                "type", "SEND_MESSAGE",
                 "requestId", requestId,
-                "roomId", roomId.toString()
+                "roomId", roomId.toString(),
+                "content", content
         )));
     }
 

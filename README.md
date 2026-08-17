@@ -1,8 +1,8 @@
 # Game Chat Room Service
 
-Production-oriented real-time chat backend for multiplayer games. **V1** covers a single Spring Boot node with JWT auth, room management, raw JSON WebSockets, and PostgreSQL message persistence.
+Production-oriented real-time chat backend for multiplayer games. **V2** is a single Spring Boot node with JWT auth, room management, JSON WebSockets, PostgreSQL persistence, per-room sequence numbers, missed-message sync, heartbeats, in-memory presence, typing, and persist ACKs.
 
-Redis, Kafka, presence, typing indicators, acknowledgements, sequence numbers, and multi-node fan-out are intentionally out of scope until later versions.
+Redis, Kafka, and multi-node fan-out remain out of scope until V3.
 
 ## Prerequisites
 
@@ -23,7 +23,7 @@ curl http://localhost:8080/actuator/health
 
 The playground proxies `/api` and `/ws` through nginx on port 8081. Direct API calls still use port 8080.
 
-Demo path: register User A → create a room → copy the room id → register User B → join that id → Connect on both panes → send a message. Live frames show up in each pane's traffic log.
+Demo path: register User A → create a room → copy the room id → register User B → join that id. Connect A, send while B is disconnected, then Connect B: `HISTORY_SYNC` fills the missed message. Connect both for live frames, presence dots, and typing.
 
 Stop with `docker compose down`. Data is kept in the `postgres_data` volume; add `-v` to wipe it.
 
@@ -100,9 +100,12 @@ curl -s http://localhost:8080/api/rooms/<roomId>/members \
 
 curl -s "http://localhost:8080/api/rooms/<roomId>/messages?page=0&size=20" \
   -H "Authorization: Bearer $TOKEN"
+
+curl -s "http://localhost:8080/api/rooms/<roomId>/messages?afterSequence=0&size=50" \
+  -H "Authorization: Bearer $TOKEN"
 ```
 
-`GET /api/rooms` lists rooms the caller belongs to. History is newest-first. Non-members receive `403`. Missing rooms receive `404`. Duplicate username/email on register receives `409`.
+`GET /api/rooms` lists rooms the caller belongs to. History is newest-first unless you pass `afterSequence` (oldest-first sync). Each message includes a per-room `sequenceNumber`. Non-members receive `403`. Missing rooms receive `404`. Duplicate username/email on register receives `409`.
 
 ## WebSocket protocol
 
@@ -120,7 +123,8 @@ Join (must already be a REST member of the room):
 {
   "type": "JOIN_ROOM",
   "requestId": "req-1",
-  "roomId": "<room-uuid>"
+  "roomId": "<room-uuid>",
+  "afterSequence": 0
 }
 ```
 
@@ -167,9 +171,12 @@ Broadcast after persist:
   "senderId": "<user-uuid>",
   "content": "Enemy approaching",
   "timestamp": "2026-08-16T09:30:10Z",
+  "sequenceNumber": 1,
   "requestId": "req-3"
 }
 ```
+
+The sender also receives `ACK` with the same `messageId` / `sequenceNumber` before the room broadcast. `JOIN_ROOM` with `afterSequence` returns `HISTORY_SYNC` for missed rows. Presence, typing, and `PING`/`PONG` are documented in [API.md](API.md).
 
 Errors:
 
@@ -182,9 +189,7 @@ Errors:
 }
 ```
 
-Unsupported event types return `UNSUPPORTED_TYPE`. Malformed JSON returns `BAD_REQUEST` and does not close the socket.
-
-V1 does not implement heartbeats, typing, ACKs, sequence numbers, or missed-message sync.
+Unsupported event types return `UNSUPPORTED_TYPE`. Malformed JSON returns `BAD_REQUEST` and does not close the socket. Idle sockets are closed after 60s with no inbound frames.
 
 Example with [websocat](https://github.com/vi/websocat):
 
@@ -217,15 +222,18 @@ docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v "%cd%":/app -w /
 
 On Linux/macOS replace `%cd%` with `$(pwd)`.
 
-Unit tests cover JWT, registration hashing, room membership rules (including listing a user's rooms), and message validation. The integration test covers REST auth/rooms/history and a two-client WebSocket broadcast that is persisted.
+Unit tests cover JWT, registration hashing, room membership, sequence allocation, presence join/leave, and message validation. The integration tests cover REST auth/rooms/history, two-client live broadcast, and missed-message `HISTORY_SYNC`.
 
-## V1 definition of done
+## V2 definition of done
 
 - `docker compose up --build` starts the stack with no host Java/Maven/Postgres install
 - Playground is available at `http://localhost:8081`
 - Register/login returns a JWT
 - Users can list their rooms, create, join, leave, and list room members
-- An authenticated WebSocket can join a room and send a message
-- Members connected to this node receive the message in real time
-- Messages are stored in PostgreSQL and returned by paginated history
+- Messages have a per-room `sequenceNumber`; REST supports `afterSequence`
+- An authenticated WebSocket can `JOIN_ROOM` with `afterSequence` and receive `HISTORY_SYNC`
+- Owner can send while a member is disconnected; the member sees the message on connect
+- Members connected to this node receive live `MESSAGE` frames
+- Sender receives persist `ACK`; presence and typing work in-room
+- Idle sockets are dropped; playground pings every 20s
 - Unauthorized room access is rejected on REST and WebSocket

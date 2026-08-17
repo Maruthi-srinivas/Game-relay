@@ -25,6 +25,9 @@ public class Message {
     @Column(nullable = false, length = 2000)
     private String content;
 
+    @Column(name = "sequence_number", nullable = false)
+    private long sequenceNumber;
+
     @Column(name = "created_at", nullable = false)
     private Instant createdAt;
 
@@ -71,6 +74,14 @@ public class Message {
 
     public void setContent(String content) {
         this.content = content;
+    }
+
+    public long getSequenceNumber() {
+        return sequenceNumber;
+    }
+
+    public void setSequenceNumber(long sequenceNumber) {
+        this.sequenceNumber = sequenceNumber;
     }
 
     public Instant getCreatedAt() {

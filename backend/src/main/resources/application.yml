@@ -35,3 +35,7 @@ jwt:
 app:
   chat:
     max-message-length: 2000
+    sync-batch-size: 100
+    heartbeat-timeout-ms: 60000
+    heartbeat-sweep-ms: 15000
+    typing-idle-ms: 3000

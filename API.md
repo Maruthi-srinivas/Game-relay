@@ -1,4 +1,4 @@
-# Game Chat Room Service — API Guide (V1)
+# Game Chat Room Service — API Guide (V2)
 
 Base URL: `http://localhost:8080`
 
@@ -380,18 +380,21 @@ curl.exe -s http://localhost:8080/api/rooms/$ROOM/members `
 
 ## Message history (REST)
 
-Chat **send** is WebSocket-only in V1. REST only reads history.
+Chat **send** is WebSocket-only. REST only reads history.
 
 ### GET `/api/rooms/{roomId}/messages`
 
-**Members only.** Newest first.
+**Members only.**
 
 Query params:
 
 | Param | Default | Notes |
 |---|---|---|
-| `page` | `0` | Negative values treated as `0` |
+| `page` | `0` | Used when `afterSequence` is omitted. Negative values treated as `0` |
 | `size` | `20` | Clamped to 1–100 |
+| `afterSequence` | omitted | When set, returns messages with `sequenceNumber > afterSequence`, **oldest-first** (sync order). `page` is ignored. |
+
+Without `afterSequence`, history is **newest-first**.
 
 **Response `200 OK`**
 
@@ -403,7 +406,8 @@ Query params:
       "roomId": "b81c9d10-2222-4aaa-8f00-aaaaaaaaaaaa",
       "senderId": "7c19f8a2-4d3e-4b1a-9c22-1a2b3c4d5e6f",
       "content": "Enemy approaching",
-      "timestamp": "2026-08-16T17:32:00Z"
+      "timestamp": "2026-08-16T17:32:00Z",
+      "sequenceNumber": 1
     }
   ],
   "page": 0,
@@ -431,6 +435,9 @@ Empty room:
 
 ```powershell
 curl.exe -s "http://localhost:8080/api/rooms/$ROOM/messages?page=0&size=20" `
+  -H "Authorization: Bearer $TOKEN"
+
+curl.exe -s "http://localhost:8080/api/rooms/$ROOM/messages?afterSequence=0&size=50" `
   -H "Authorization: Bearer $TOKEN"
 ```
 
@@ -463,7 +470,31 @@ You must **join the room via REST first**, then `JOIN_ROOM` on the socket to rec
 }
 ```
 
-**After `JOIN_ROOM`**
+**After `JOIN_ROOM`** (in order): `HISTORY_SYNC`, `JOINED`, `PRESENCE_SNAPSHOT`, then `PRESENCE` `ONLINE` if this is the user's first socket in the room.
+
+```json
+{
+  "type": "HISTORY_SYNC",
+  "roomId": "b81c9d10-2222-4aaa-8f00-aaaaaaaaaaaa",
+  "messages": [
+    {
+      "type": "MESSAGE",
+      "messageId": "9d0e1f20-aaaa-bbbb-cccc-ddddeeeeffff",
+      "roomId": "b81c9d10-2222-4aaa-8f00-aaaaaaaaaaaa",
+      "senderId": "7c19f8a2-4d3e-4b1a-9c22-1a2b3c4d5e6f",
+      "content": "Enemy approaching",
+      "timestamp": "2026-08-16T17:32:00Z",
+      "sequenceNumber": 1
+    }
+  ],
+  "fromSequence": 1,
+  "toSequence": 1,
+  "truncated": false,
+  "requestId": "req-1"
+}
+```
+
+`afterSequence` omitted or `0` means the client has nothing. If more than `app.chat.sync-batch-size` (default 100) messages remain, `truncated` is `true`; continue with REST `afterSequence`.
 
 ```json
 {
@@ -473,6 +504,28 @@ You must **join the room via REST first**, then `JOIN_ROOM` on the socket to rec
 }
 ```
 
+```json
+{
+  "type": "PRESENCE_SNAPSHOT",
+  "roomId": "b81c9d10-2222-4aaa-8f00-aaaaaaaaaaaa",
+  "online": [
+    { "userId": "7c19f8a2-4d3e-4b1a-9c22-1a2b3c4d5e6f", "username": "alice" }
+  ]
+}
+```
+
+```json
+{
+  "type": "PRESENCE",
+  "roomId": "b81c9d10-2222-4aaa-8f00-aaaaaaaaaaaa",
+  "userId": "11111111-2222-3333-4444-555555555555",
+  "username": "bob",
+  "status": "ONLINE"
+}
+```
+
+`status` is `ONLINE` or `OFFLINE`. Offline is emitted when the user's last socket leaves the room, the socket closes, or they REST-leave.
+
 **After `LEAVE_ROOM`**
 
 ```json
@@ -480,6 +533,18 @@ You must **join the room via REST first**, then `JOIN_ROOM` on the socket to rec
   "type": "LEFT",
   "roomId": "b81c9d10-2222-4aaa-8f00-aaaaaaaaaaaa",
   "requestId": "req-2"
+}
+```
+
+**Persist ACK** (sender only, after save)
+
+```json
+{
+  "type": "ACK",
+  "requestId": "req-3",
+  "messageId": "9d0e1f20-aaaa-bbbb-cccc-ddddeeeeffff",
+  "roomId": "b81c9d10-2222-4aaa-8f00-aaaaaaaaaaaa",
+  "sequenceNumber": 1
 }
 ```
 
@@ -493,11 +558,30 @@ You must **join the room via REST first**, then `JOIN_ROOM` on the socket to rec
   "senderId": "7c19f8a2-4d3e-4b1a-9c22-1a2b3c4d5e6f",
   "content": "Enemy approaching",
   "timestamp": "2026-08-16T17:32:00Z",
+  "sequenceNumber": 1,
   "requestId": "req-3"
 }
 ```
 
-`requestId` is echoed only if the client sent one. `senderId` is taken from the JWT, never from the client body.
+`requestId` is echoed only if the client sent one. `senderId` is taken from the JWT, never from the client body. `sequenceNumber` is per-room and monotonic.
+
+**PONG** (reply to `PING`)
+
+```json
+{ "type": "PONG", "requestId": "req-ping" }
+```
+
+**Typing** (other sockets in the room only)
+
+```json
+{
+  "type": "TYPING",
+  "roomId": "b81c9d10-2222-4aaa-8f00-aaaaaaaaaaaa",
+  "userId": "7c19f8a2-4d3e-4b1a-9c22-1a2b3c4d5e6f",
+  "username": "alice",
+  "isTyping": true
+}
+```
 
 **Error** (socket stays open)
 
@@ -512,25 +596,28 @@ You must **join the room via REST first**, then `JOIN_ROOM` on the socket to rec
 
 | code | When |
 |---|---|
-| `BAD_REQUEST` | Malformed JSON, missing `type`/`roomId`, blank/oversized content (max 2000), invalid UUID |
+| `BAD_REQUEST` | Malformed JSON, missing `type`/`roomId`, blank/oversized content (max 2000), invalid UUID, bad `afterSequence` |
 | `FORBIDDEN` | `JOIN_ROOM` / `SEND_MESSAGE` for a room you are not a REST member of |
 | `NOT_FOUND` | Room does not exist |
 | `UNSUPPORTED_TYPE` | Unknown `type` |
 | `INTERNAL_ERROR` | Unexpected server failure |
 
-V1 does not implement heartbeats, typing, ACKs, sequence numbers, or missed-message sync.
+Idle sockets with no inbound frames for `app.chat.heartbeat-timeout-ms` (default 60s) are closed.
 
 ### Client → server events
 
-**JOIN_ROOM** — subscribe this socket to broadcasts. Caller must already be a REST member.
+**JOIN_ROOM** — subscribe this socket to broadcasts and receive missed messages. Caller must already be a REST member.
 
 ```json
 {
   "type": "JOIN_ROOM",
   "requestId": "req-1",
-  "roomId": "b81c9d10-2222-4aaa-8f00-aaaaaaaaaaaa"
+  "roomId": "b81c9d10-2222-4aaa-8f00-aaaaaaaaaaaa",
+  "afterSequence": 0
 }
 ```
+
+`afterSequence` is optional (default `0`). The server replies with `HISTORY_SYNC` for `sequenceNumber > afterSequence`, then `JOINED`.
 
 **LEAVE_ROOM** — unsubscribe this socket only. Does **not** change REST membership.
 
@@ -542,7 +629,7 @@ V1 does not implement heartbeats, typing, ACKs, sequence numbers, or missed-mess
 }
 ```
 
-**SEND_MESSAGE** — persist then broadcast. Max content length 2000 after trim.
+**SEND_MESSAGE** — persist, `ACK` the sender, then broadcast `MESSAGE`. Max content length 2000 after trim.
 
 ```json
 {
@@ -555,6 +642,23 @@ V1 does not implement heartbeats, typing, ACKs, sequence numbers, or missed-mess
 
 If this socket had not `JOIN_ROOM` yet, a successful send still subscribes it so the sender receives the `MESSAGE` echo.
 
+**PING** — liveness. Any inbound frame also refreshes idle timeout.
+
+```json
+{ "type": "PING", "requestId": "req-ping" }
+```
+
+**TYPING** — ephemeral. Ignored if this socket is not joined to the room. Not persisted.
+
+```json
+{
+  "type": "TYPING",
+  "requestId": "req-t",
+  "roomId": "b81c9d10-2222-4aaa-8f00-aaaaaaaaaaaa",
+  "isTyping": true
+}
+```
+
 ### Example with websocat
 
 ```powershell
@@ -564,25 +668,26 @@ websocat "ws://localhost:8080/ws/chat?token=$TOKEN"
 Then paste one JSON object per line:
 
 ```json
-{"type":"JOIN_ROOM","requestId":"req-1","roomId":"<room-uuid>"}
+{"type":"JOIN_ROOM","requestId":"req-1","roomId":"<room-uuid>","afterSequence":0}
 {"type":"SEND_MESSAGE","requestId":"req-2","roomId":"<room-uuid>","content":"Enemy approaching"}
 ```
 
-After a successful send, `GET /api/rooms/{roomId}/messages` returns that row.
+After a successful send, `GET /api/rooms/{roomId}/messages` returns that row with a `sequenceNumber`.
 
 ---
 
-## Typical V1 flow
+## Typical V2 flow
 
 1. `POST /api/auth/register` as alice → save `token` and `userId`
 2. `POST /api/rooms` with alice's token → save room `id`
 3. `GET /api/rooms` as alice → contains that room; as a stranger → `[]`
 4. `POST /api/auth/register` as bob → save bob's token
 5. `POST /api/rooms/{roomId}/join` as bob
-6. Open two WebSockets with each token, send `JOIN_ROOM`
-7. Alice sends `SEND_MESSAGE` → both sockets get `MESSAGE`
-8. `GET /api/rooms/{roomId}/messages` as alice or bob → history contains the message
-9. Same history call as a third user who never joined → `403`
+6. Alice opens a WebSocket, `JOIN_ROOM`, `SEND_MESSAGE` while Bob is disconnected
+7. Bob connects and `JOIN_ROOM` with `afterSequence: 0` → `HISTORY_SYNC` contains Alice's message
+8. Alice sends again → both sockets get live `MESSAGE`
+9. `GET /api/rooms/{roomId}/messages` as alice or bob → history contains both messages
+10. Same history call as a third user who never joined → `403`
 
 ---
 
@@ -599,5 +704,5 @@ After a successful send, `GET /api/rooms/{roomId}/messages` returns that row.
 | POST | `/api/rooms/{roomId}/join` | Bearer | `200` room object |
 | POST | `/api/rooms/{roomId}/leave` | Bearer, member | `204` empty |
 | GET | `/api/rooms/{roomId}/members` | Bearer, member | `200` member array |
-| GET | `/api/rooms/{roomId}/messages` | Bearer, member | `200` paged messages |
-| WS | `/ws/chat` | JWT query or header | `CONNECTED`, then events |
+| GET | `/api/rooms/{roomId}/messages` | Bearer, member | `200` paged messages (`sequenceNumber`; optional `afterSequence`) |
+| WS | `/ws/chat` | JWT query or header | `CONNECTED`, `HISTORY_SYNC`, `JOINED`, `ACK`, `MESSAGE`, presence, typing |

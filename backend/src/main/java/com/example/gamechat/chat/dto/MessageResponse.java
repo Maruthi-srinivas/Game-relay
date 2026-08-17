@@ -8,6 +8,7 @@ public record MessageResponse(
         UUID roomId,
         UUID senderId,
         String content,
-        Instant timestamp
+        Instant timestamp,
+        long sequenceNumber
 ) {
 }

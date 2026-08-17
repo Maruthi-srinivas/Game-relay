@@ -1,7 +1,7 @@
 package com.example.gamechat.room.controller;
 
 import com.example.gamechat.auth.security.UserPrincipal;
-import com.example.gamechat.chat.websocket.SessionRegistry;
+import com.example.gamechat.chat.websocket.ChatWebSocketHandler;
 import com.example.gamechat.room.dto.CreateRoomRequest;
 import com.example.gamechat.room.dto.MemberResponse;
 import com.example.gamechat.room.dto.RoomResponse;
@@ -25,11 +25,11 @@ import java.util.UUID;
 public class RoomController {
 
     private final RoomService roomService;
-    private final SessionRegistry sessionRegistry;
+    private final ChatWebSocketHandler chatWebSocketHandler;
 
-    public RoomController(RoomService roomService, SessionRegistry sessionRegistry) {
+    public RoomController(RoomService roomService, ChatWebSocketHandler chatWebSocketHandler) {
         this.roomService = roomService;
-        this.sessionRegistry = sessionRegistry;
+        this.chatWebSocketHandler = chatWebSocketHandler;
     }
 
     @PostMapping
@@ -69,7 +69,7 @@ public class RoomController {
             @PathVariable UUID roomId
     ) {
         roomService.leave(roomId, principal.userId());
-        sessionRegistry.removeUserFromRoom(principal.userId(), roomId);
+        chatWebSocketHandler.dropUserFromRoom(principal.userId(), roomId);
     }
 
     @GetMapping("/{roomId}/members")

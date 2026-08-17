@@ -13,6 +13,10 @@ export function mountPane(root, { title, defaults }) {
     members: [],
     messages: [],
     seenMessageIds: new Set(),
+    onlineUserIds: new Set(),
+    typingByUser: {},
+    lastTypingSent: 0,
+    typingIdleTimer: null,
     socket: null,
     wsState: "closed",
     logs: [],
@@ -79,6 +83,7 @@ export function mountPane(root, { title, defaults }) {
       <section>
         <h3>Chat</h3>
         <div class="messages" data-messages><div class="empty">No messages</div></div>
+        <div class="typing" data-typing></div>
         <form class="composer" data-send-form>
           <input data-content maxlength="2000" placeholder="SEND_MESSAGE (max 2000)" autocomplete="off">
           <button class="primary" type="submit">Send</button>
@@ -110,6 +115,7 @@ export function mountPane(root, { title, defaults }) {
     rooms: root.querySelector("[data-rooms]"),
     members: root.querySelector("[data-members-list]"),
     messages: root.querySelector("[data-messages]"),
+    typing: root.querySelector("[data-typing]"),
     content: root.querySelector("[data-content]"),
     log: root.querySelector("[data-log]"),
     leaveRest: root.querySelector("[data-leave-rest]"),
@@ -123,7 +129,7 @@ export function mountPane(root, { title, defaults }) {
   el.wsDisconnect.addEventListener("click", disconnectWs);
   el.wsJoin.addEventListener("click", () => {
     if (state.socket && state.selectedRoomId) {
-      state.socket.joinRoom(state.selectedRoomId);
+      state.socket.joinRoom(state.selectedRoomId, lastSequence());
     }
   });
   el.wsLeave.addEventListener("click", () => {
@@ -142,6 +148,7 @@ export function mountPane(root, { title, defaults }) {
     event.preventDefault();
     sendChat();
   });
+  el.content.addEventListener("input", onComposerInput);
 
   function log(entry) {
     state.logs.unshift(entry);
@@ -178,8 +185,12 @@ export function mountPane(root, { title, defaults }) {
     state.selectedRoomId = null;
     state.messages = [];
     state.seenMessageIds = new Set();
+    state.onlineUserIds = new Set();
+    state.typingByUser = {};
     renderSession();
     renderMessages();
+    renderMembers();
+    renderTyping();
     await refreshRooms();
   }
 
@@ -220,9 +231,12 @@ export function mountPane(root, { title, defaults }) {
       state.members = [];
       state.messages = [];
       state.seenMessageIds = new Set();
+      state.onlineUserIds = new Set();
+      state.typingByUser = {};
       await refreshRooms();
       renderMembers();
       renderMessages();
+      renderTyping();
       renderRoomButtons();
     }
   }
@@ -245,7 +259,7 @@ export function mountPane(root, { title, defaults }) {
     renderRoomButtons();
     await Promise.all([loadMembers(), loadHistory()]);
     if (state.socket && state.wsState === "open") {
-      state.socket.joinRoom(roomId);
+      state.socket.joinRoom(roomId, lastSequence());
     }
   }
 
@@ -302,14 +316,17 @@ export function mountPane(root, { title, defaults }) {
         state.wsState = wsState;
         if (wsState === "closed" || wsState === "error") {
           state.socket = null;
+          state.onlineUserIds = new Set();
+          state.typingByUser = {};
+          renderMembers();
+          renderTyping();
+        }
+        if (wsState === "open" && state.selectedRoomId && state.socket) {
+          state.socket.joinRoom(state.selectedRoomId, lastSequence());
         }
         renderWs();
       },
-      onEvent: (event) => {
-        if (event?.type === "MESSAGE" && event.roomId === state.selectedRoomId) {
-          addMessage(event, true);
-        }
-      },
+      onEvent: (event) => handleSocketEvent(event),
     });
     renderWs();
   }
@@ -338,6 +355,87 @@ export function mountPane(root, { title, defaults }) {
     }
     state.socket.sendMessage(state.selectedRoomId, content);
     el.content.value = "";
+    sendTyping(false);
+  }
+
+  function onComposerInput() {
+    if (!state.socket || state.wsState !== "open" || !state.selectedRoomId) {
+      return;
+    }
+    const now = Date.now();
+    if (now - state.lastTypingSent > 1000) {
+      sendTyping(true);
+      state.lastTypingSent = now;
+    }
+    if (state.typingIdleTimer) {
+      clearTimeout(state.typingIdleTimer);
+    }
+    state.typingIdleTimer = setTimeout(() => sendTyping(false), 3000);
+  }
+
+  function sendTyping(isTyping) {
+    if (!state.socket || state.wsState !== "open" || !state.selectedRoomId) {
+      return;
+    }
+    state.socket.typing(state.selectedRoomId, isTyping);
+  }
+
+  function handleSocketEvent(event) {
+    if (!event || typeof event !== "object") {
+      return;
+    }
+    switch (event.type) {
+      case "MESSAGE":
+        if (event.roomId === state.selectedRoomId) {
+          addMessage(event, true);
+        }
+        break;
+      case "HISTORY_SYNC":
+        if (event.roomId === state.selectedRoomId && Array.isArray(event.messages)) {
+          for (const msg of event.messages) {
+            addMessage(msg, false);
+          }
+          renderMessages();
+        }
+        break;
+      case "PRESENCE_SNAPSHOT":
+        if (event.roomId === state.selectedRoomId) {
+          state.onlineUserIds = new Set((event.online || []).map((user) => user.userId));
+          renderMembers();
+        }
+        break;
+      case "PRESENCE":
+        if (event.roomId === state.selectedRoomId) {
+          if (event.status === "ONLINE") {
+            state.onlineUserIds.add(event.userId);
+          } else {
+            state.onlineUserIds.delete(event.userId);
+            delete state.typingByUser[event.userId];
+            renderTyping();
+          }
+          renderMembers();
+        }
+        break;
+      case "TYPING":
+        if (event.roomId === state.selectedRoomId && event.userId !== state.userId) {
+          if (event.isTyping) {
+            state.typingByUser[event.userId] = event.username || shortId(event.userId);
+          } else {
+            delete state.typingByUser[event.userId];
+          }
+          renderTyping();
+        }
+        break;
+      default:
+        break;
+    }
+  }
+
+  function lastSequence() {
+    return state.messages.reduce((max, msg) => {
+      const seq = Number(msg.sequenceNumber) || 0;
+      return seq > max ? seq : max;
+    }, 0);
   }
 
   async function copySelected() {
@@ -410,8 +508,16 @@ export function mountPane(root, { title, defaults }) {
       return;
     }
     el.members.innerHTML = state.members.map((member) => `
-      <div class="member-item">${escapeHtml(member.username)} <span class="id">${escapeHtml(member.role)}</span></div>
+      <div class="member-item">
+        <span class="presence${state.onlineUserIds.has(member.userId) ? " on" : ""}"></span>
+        ${escapeHtml(member.username)} <span class="id">${escapeHtml(member.role)}</span>
+      </div>
     `).join("");
+  }
+
+  function renderTyping() {
+    const names = Object.values(state.typingByUser);
+    el.typing.textContent = names.length ? `${names.join(", ")} is typing…` : "";
   }
 
   function renderMessages() {
@@ -451,6 +557,7 @@ export function mountPane(root, { title, defaults }) {
   renderRooms();
   renderMembers();
   renderMessages();
+  renderTyping();
   renderRoomButtons();
 }
 
