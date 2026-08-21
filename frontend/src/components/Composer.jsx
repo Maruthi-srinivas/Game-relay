@@ -1,15 +1,17 @@
 import { useEffect, useRef, useState } from "react";
 import { useChat } from "../chat/ChatContext.jsx";
+import { roomSlug } from "./roomTypes.js";
 
 const MAX_LEN = 2000;
 const TYPING_THROTTLE_MS = 400;
 
 export default function Composer({ disabled }) {
-  const { sendChat, sendTyping } = useChat();
+  const { sendChat, sendTyping, room } = useChat();
   const [text, setText] = useState("");
   const typingSentRef = useRef(false);
   const lastSentRef = useRef(0);
   const idleTimerRef = useRef(null);
+  const slug = roomSlug(room?.name);
 
   function stopTyping() {
     if (idleTimerRef.current) {
@@ -57,21 +59,29 @@ export default function Composer({ disabled }) {
     stopTyping();
   }
 
+  const nearCap = text.length > MAX_LEN - 200;
+
   return (
     <form className="composer" onSubmit={onSubmit}>
-      <input
-        value={text}
-        onChange={onChange}
-        maxLength={MAX_LEN}
-        placeholder={disabled ? "Connecting…" : "Message"}
-        disabled={disabled}
-        autoComplete="off"
-      />
-      <span className="count">
-        {text.length}/{MAX_LEN}
-      </span>
-      <button className="primary" type="submit" disabled={disabled || !text.trim()}>
-        Send
+      <div className="composer-wrap">
+        <input
+          value={text}
+          onChange={onChange}
+          maxLength={MAX_LEN}
+          placeholder={disabled ? "Connecting…" : `Message #${slug}`}
+          disabled={disabled}
+          autoComplete="off"
+        />
+        {nearCap ? (
+          <span className="count">
+            {text.length}/{MAX_LEN}
+          </span>
+        ) : null}
+      </div>
+      <button className="primary send" type="submit" disabled={disabled || !text.trim()} title="Send">
+        <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+          <path d="M2.2 8.1 13.4 2.6c.5-.3 1 .3.7.8L9.4 14c-.2.5-.9.5-1.2 0L6.7 10.4 2.2 8.9c-.6-.2-.6-.7 0-.8Z" />
+        </svg>
       </button>
     </form>
   );

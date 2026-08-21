@@ -71,8 +71,11 @@ export function useTrafficLog() {
 export function TrafficButton() {
   const { openLog, entries } = useTrafficLog();
   return (
-    <button type="button" onClick={openLog} title="API traffic">
-      Traffic{entries.length ? ` (${entries.length})` : ""}
+    <button type="button" className="icon-btn" onClick={openLog} title="Traffic">
+      <svg viewBox="0 0 16 16" fill="none" aria-hidden="true">
+        <path d="M2 4h12M2 8h8M2 12h10" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+      </svg>
+      {entries.length ? <span className="icon-count">{entries.length > 99 ? "99" : entries.length}</span> : null}
     </button>
   );
 }
@@ -103,7 +106,7 @@ function TrafficModal() {
         onClick={(e) => e.stopPropagation()}
       >
         <div className="traffic-head">
-          <h2 id="traffic-title">API traffic</h2>
+          <h2 id="traffic-title">Traffic</h2>
           <div className="traffic-actions">
             <div className="traffic-filters">
               {["all", "rest", "ws"].map((value) => (

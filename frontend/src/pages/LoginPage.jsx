@@ -36,8 +36,11 @@ export default function LoginPage() {
         <TrafficButton />
       </div>
       <form className="auth-card" onSubmit={onSubmit}>
-        <h1>Game Chat</h1>
-        <p className="muted">Sign in with your username. Open another tab to use a second account.</p>
+        <div className="wordmark">
+          ARE<span>NA</span>
+        </div>
+        <h1>Sign in</h1>
+        <p className="muted">Enter your callsign to drop into voice-of-text lobbies.</p>
         {error ? <div className="alert">{error}</div> : null}
         <label className="field">
           Username
@@ -58,10 +61,10 @@ export default function LoginPage() {
           />
         </label>
         <button className="primary" type="submit" disabled={busy}>
-          {busy ? "Signing in…" : "Sign in"}
+          {busy ? "Connecting…" : "Enter"}
         </button>
         <p className="muted">
-          No account? <Link to="/register">Register</Link>
+          New here? <Link to="/register">Create an account</Link>
         </p>
       </form>
     </div>

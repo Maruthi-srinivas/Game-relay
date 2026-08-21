@@ -48,8 +48,11 @@ export default function RegisterPage() {
         <TrafficButton />
       </div>
       <form className="auth-card" onSubmit={onSubmit}>
+        <div className="wordmark">
+          ARE<span>NA</span>
+        </div>
         <h1>Create account</h1>
-        <p className="muted">Each browser tab keeps its own session, so you can register two users side by side.</p>
+        <p className="muted">Pick a callsign. You can hop into any lobby with an invite.</p>
         {error ? <div className="alert">{error}</div> : null}
         <label className="field">
           Username
@@ -79,7 +82,7 @@ export default function RegisterPage() {
           />
         </label>
         <button className="primary" type="submit" disabled={busy}>
-          {busy ? "Creating…" : "Register"}
+          {busy ? "Creating…" : "Deploy"}
         </button>
         <p className="muted">
           Already registered? <Link to="/login">Sign in</Link>

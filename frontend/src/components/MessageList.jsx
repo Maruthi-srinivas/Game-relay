@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
 import { useChat } from "../chat/ChatContext.jsx";
+import Avatar from "./Avatar.jsx";
 
 function formatTime(ts) {
   if (!ts) {
@@ -45,21 +46,24 @@ export default function MessageList() {
   return (
     <div className="transcript" ref={scrollerRef} onScroll={onScroll}>
       {hasMoreHistory ? (
-        <button className="load-older" type="button" disabled={loadingHistory} onClick={loadOlderHistory}>
+        <button className="load-older ghost" type="button" disabled={loadingHistory} onClick={loadOlderHistory}>
           {loadingHistory ? "Loading…" : "Load older messages"}
         </button>
       ) : null}
-      {messages.length === 0 && !loadingHistory ? <div className="empty">No messages yet</div> : null}
+      {messages.length === 0 && !loadingHistory ? <div className="empty">No messages yet. Say something.</div> : null}
       {messages.map((msg) => {
         const mine = msg.senderId === userId;
         const name = namesByUserId[msg.senderId] || (mine ? "you" : msg.senderId?.slice(0, 8));
         return (
           <div key={msg.messageId || msg.requestId} className={`msg ${mine ? "mine" : ""} ${msg.pending ? "pending" : ""}`}>
-            <div className="msg-meta">
-              <span className="from">{name}</span>
-              <span className="time">{msg.pending ? "sending…" : formatTime(msg.timestamp)}</span>
+            <Avatar name={name} seed={msg.senderId} size="lg" />
+            <div>
+              <div className="msg-meta">
+                <span className="from">{name}</span>
+                <span className="time">{msg.pending ? "sending…" : formatTime(msg.timestamp)}</span>
+              </div>
+              <div className="body">{msg.content}</div>
             </div>
-            <div className="body">{msg.content}</div>
           </div>
         );
       })}
