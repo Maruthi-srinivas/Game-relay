@@ -18,6 +18,12 @@ spring:
           time_zone: UTC
   flyway:
     enabled: true
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      repositories:
+        enabled: false
 
 management:
   endpoints:
@@ -35,3 +41,9 @@ jwt:
 app:
   chat:
     max-message-length: 2000
+    sync-batch-size: 100
+    heartbeat-timeout-ms: 60000
+    heartbeat-sweep-ms: 15000
+    typing-idle-ms: 3000
+    presence-ttl-ms: 90000
+    presence-sweep-ms: 15000

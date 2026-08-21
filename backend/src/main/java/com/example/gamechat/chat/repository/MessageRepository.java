@@ -10,4 +10,10 @@ import java.util.UUID;
 public interface MessageRepository extends JpaRepository<Message, UUID> {
 
     Page<Message> findByRoomIdAndDeletedAtIsNullOrderByCreatedAtDesc(UUID roomId, Pageable pageable);
+
+    Page<Message> findByRoomIdAndDeletedAtIsNullAndSequenceNumberGreaterThanOrderBySequenceNumberAsc(
+            UUID roomId,
+            long sequenceNumber,
+            Pageable pageable
+    );
 }

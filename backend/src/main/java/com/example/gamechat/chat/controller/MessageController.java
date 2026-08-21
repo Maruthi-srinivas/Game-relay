@@ -28,8 +28,12 @@ public class MessageController {
             @AuthenticationPrincipal UserPrincipal principal,
             @PathVariable UUID roomId,
             @RequestParam(defaultValue = "0") int page,
-            @RequestParam(defaultValue = "20") int size
+            @RequestParam(defaultValue = "20") int size,
+            @RequestParam(required = false) Long afterSequence
     ) {
+        if (afterSequence != null) {
+            return messageService.historyAfter(roomId, principal.userId(), afterSequence, size);
+        }
         return messageService.history(roomId, principal.userId(), page, size);
     }
 }

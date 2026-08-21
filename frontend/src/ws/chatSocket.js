@@ -1,0 +1,112 @@
+import { logTraffic } from "../api/trafficLog.js";
+
+const PING_MS = 20000;
+const WS_PATH = "/ws/chat";
+
+function quiet(payload) {
+  const type = payload?.type;
+  return type === "PING" || type === "PONG";
+}
+
+export function connectChat({ token, onEvent, onState }) {
+  const proto = location.protocol === "https:" ? "wss" : "ws";
+  const url = `${proto}://${location.host}${WS_PATH}?token=${encodeURIComponent(token)}`;
+  const socket = new WebSocket(url);
+  let requestSeq = 0;
+  let pingTimer = null;
+  let closed = false;
+
+  function nextId() {
+    requestSeq += 1;
+    return `req-${requestSeq}`;
+  }
+
+  socket.addEventListener("open", () => {
+    logTraffic({ kind: "ws", dir: "open", path: WS_PATH, payload: { url: WS_PATH } });
+    pingTimer = setInterval(() => {
+      if (socket.readyState === WebSocket.OPEN) {
+        send({ type: "PING" });
+      }
+    }, PING_MS);
+    onState?.("open");
+  });
+
+  socket.addEventListener("close", (ev) => {
+    if (pingTimer) {
+      clearInterval(pingTimer);
+      pingTimer = null;
+    }
+    logTraffic({
+      kind: "ws",
+      dir: "close",
+      path: WS_PATH,
+      payload: { code: ev.code, reason: ev.reason || "" },
+    });
+    onState?.("closed");
+  });
+
+  socket.addEventListener("error", () => {
+    logTraffic({ kind: "ws", dir: "error", path: WS_PATH, payload: { message: "WebSocket error" } });
+    onState?.("error");
+  });
+
+  socket.addEventListener("message", (ev) => {
+    let parsed = ev.data;
+    try {
+      parsed = JSON.parse(ev.data);
+    } catch {
+      // keep raw string
+    }
+    if (!quiet(parsed)) {
+      logTraffic({ kind: "ws", dir: "in", path: WS_PATH, payload: parsed });
+    }
+    onEvent?.(parsed);
+  });
+
+  function send(payload) {
+    if (!payload.requestId) {
+      payload.requestId = nextId();
+    }
+    if (socket.readyState !== WebSocket.OPEN) {
+      return payload.requestId;
+    }
+    if (!quiet(payload)) {
+      logTraffic({ kind: "ws", dir: "out", path: WS_PATH, payload });
+    }
+    socket.send(JSON.stringify(payload));
+    return payload.requestId;
+  }
+
+  onState?.("connecting");
+
+  return {
+    joinRoom(roomId, afterSequence = 0) {
+      return send({ type: "JOIN_ROOM", roomId, afterSequence });
+    },
+    leaveRoom(roomId) {
+      return send({ type: "LEAVE_ROOM", roomId });
+    },
+    sendMessage(roomId, content) {
+      return send({ type: "SEND_MESSAGE", roomId, content });
+    },
+    typing(roomId, isTyping) {
+      return send({ type: "TYPING", roomId, isTyping });
+    },
+    close() {
+      closed = true;
+      if (pingTimer) {
+        clearInterval(pingTimer);
+        pingTimer = null;
+      }
+      if (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING) {
+        socket.close();
+      }
+    },
+    get readyState() {
+      return socket.readyState;
+    },
+    get closed() {
+      return closed;
+    },
+  };
+}

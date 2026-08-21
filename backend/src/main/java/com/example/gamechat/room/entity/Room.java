@@ -34,6 +34,9 @@ public class Room {
     @Column(name = "max_members", nullable = false)
     private int maxMembers;
 
+    @Column(name = "last_sequence", nullable = false)
+    private long lastSequence;
+
     @Column(name = "created_at", nullable = false)
     private Instant createdAt;
 
@@ -99,6 +102,14 @@ public class Room {
 
     public void setMaxMembers(int maxMembers) {
         this.maxMembers = maxMembers;
+    }
+
+    public long getLastSequence() {
+        return lastSequence;
+    }
+
+    public void setLastSequence(long lastSequence) {
+        this.lastSequence = lastSequence;
     }
 
     public Instant getCreatedAt() {

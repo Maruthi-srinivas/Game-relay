@@ -1,5 +1,6 @@
 package com.example.gamechat.chat.service;
 
+import com.example.gamechat.chat.dto.SyncBatch;
 import com.example.gamechat.chat.entity.Message;
 import com.example.gamechat.room.service.RoomService;
 import org.springframework.stereotype.Service;
@@ -26,5 +27,11 @@ public class ChatService {
 
     public void requireMember(UUID roomId, UUID userId) {
         roomService.requireMember(roomId, userId);
+    }
+
+    @Transactional(readOnly = true)
+    public SyncBatch sync(UUID userId, UUID roomId, long afterSequence) {
+        roomService.requireMember(roomId, userId);
+        return messageService.syncAfter(roomId, afterSequence);
     }
 }
