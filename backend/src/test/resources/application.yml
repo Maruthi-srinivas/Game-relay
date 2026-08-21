@@ -9,3 +9,5 @@ app:
     heartbeat-timeout-ms: 60000
     heartbeat-sweep-ms: 15000
     typing-idle-ms: 3000
+    presence-ttl-ms: 90000
+    presence-sweep-ms: 15000

@@ -1,10 +1,14 @@
 package com.example.gamechat.chat.websocket;
 
 import com.example.gamechat.auth.security.UserPrincipal;
+import com.example.gamechat.chat.bus.ChatEvent;
+import com.example.gamechat.chat.bus.ChatEventKind;
+import com.example.gamechat.chat.bus.ChatEventPublisher;
 import com.example.gamechat.chat.dto.MessageResponse;
 import com.example.gamechat.chat.dto.SyncBatch;
 import com.example.gamechat.chat.entity.Message;
 import com.example.gamechat.chat.service.ChatService;
+import com.example.gamechat.chat.service.PresenceService;
 import com.example.gamechat.common.exception.ApiException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -29,15 +33,21 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
 
     private final SessionRegistry sessionRegistry;
     private final ChatService chatService;
+    private final PresenceService presenceService;
+    private final ChatEventPublisher publisher;
     private final ObjectMapper objectMapper;
 
     public ChatWebSocketHandler(
             SessionRegistry sessionRegistry,
             ChatService chatService,
+            PresenceService presenceService,
+            ChatEventPublisher publisher,
             ObjectMapper objectMapper
     ) {
         this.sessionRegistry = sessionRegistry;
         this.chatService = chatService;
+        this.presenceService = presenceService;
+        this.publisher = publisher;
         this.objectMapper = objectMapper;
     }
 
@@ -55,6 +65,7 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
     @Override
     protected void handleTextMessage(WebSocketSession session, TextMessage message) throws Exception {
         sessionRegistry.touch(session);
+        heartbeatPresence(session);
         JsonNode root;
         try {
             root = objectMapper.readTree(message.getPayload());
@@ -99,27 +110,31 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
     }
 
     public void dropUserFromRoom(UUID userId, UUID roomId) {
-        String username = sessionRegistry.onlineInRoom(roomId).stream()
-                .filter(user -> user.userId().equals(userId))
-                .map(SessionRegistry.PresenceUser::username)
-                .findFirst()
-                .orElse(null);
-        boolean wentOffline = sessionRegistry.removeUserFromRoom(userId, roomId);
-        if (wentOffline && username != null) {
-            broadcastPresence(roomId, userId, username, "OFFLINE");
+        String username = presenceService.username(roomId, userId);
+        if (username == null) {
+            username = sessionRegistry.onlineInRoom(roomId).stream()
+                    .filter(user -> user.userId().equals(userId))
+                    .map(SessionRegistry.PresenceUser::username)
+                    .findFirst()
+                    .orElse("unknown");
         }
+        presenceService.forceOffline(roomId, userId);
+        ObjectNode drop = objectMapper.createObjectNode();
+        drop.put("userId", userId.toString());
+        publisher.publish(new ChatEvent(ChatEventKind.DROP_USER, roomId, null, drop));
+        publishPresence(roomId, userId, username, "OFFLINE");
     }
 
     private void handleJoin(WebSocketSession session, JsonNode root, String requestId) throws IOException {
         UUID roomId = requireRoomId(root);
         UUID userId = sessionRegistry.requireUser(session);
         chatService.requireMember(roomId, userId);
-        boolean first = sessionRegistry.joinRoom(session, roomId);
+        boolean first = subscribeLocalAndPresence(session, roomId, userId);
         sendHistorySync(session, userId, roomId, afterSequence(root), requestId);
         sendJoined(session, roomId, requestId);
         sendPresenceSnapshot(session, roomId);
         if (first) {
-            broadcastPresence(roomId, userId, sessionRegistry.username(session), "ONLINE");
+            publishPresence(roomId, userId, sessionRegistry.username(session), "ONLINE");
         }
     }
 
@@ -127,14 +142,15 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
         UUID roomId = requireRoomId(root);
         UUID userId = sessionRegistry.requireUser(session);
         String username = sessionRegistry.username(session);
-        boolean last = sessionRegistry.leaveRoom(session, roomId);
+        boolean wasJoined = sessionRegistry.isJoined(session, roomId);
+        sessionRegistry.leaveRoom(session, roomId);
         ObjectNode ack = objectMapper.createObjectNode();
         ack.put("type", "LEFT");
         ack.put("roomId", roomId.toString());
         putRequestId(ack, requestId);
         SessionRegistry.send(session, objectMapper.writeValueAsString(ack));
-        if (last) {
-            broadcastPresence(roomId, userId, username, "OFFLINE");
+        if (wasJoined && presenceService.leave(roomId, userId)) {
+            publishPresence(roomId, userId, username, "OFFLINE");
         }
     }
 
@@ -143,22 +159,14 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
         UUID userId = sessionRegistry.requireUser(session);
         if (!sessionRegistry.isJoined(session, roomId)) {
             chatService.requireMember(roomId, userId);
-            boolean first = sessionRegistry.joinRoom(session, roomId);
-            if (first) {
-                broadcastPresence(roomId, userId, sessionRegistry.username(session), "ONLINE");
+            if (subscribeLocalAndPresence(session, roomId, userId)) {
+                publishPresence(roomId, userId, sessionRegistry.username(session), "ONLINE");
             }
         }
         String content = text(root, "content");
         Message saved = chatService.sendMessage(userId, roomId, content);
         sendAck(session, saved, requestId);
-        String json = objectMapper.writeValueAsString(messageNode(saved, requestId));
-        for (WebSocketSession memberSession : sessionRegistry.sessionsInRoom(roomId)) {
-            try {
-                SessionRegistry.send(memberSession, json);
-            } catch (IOException ex) {
-                log.warn("Failed to send message to session {}", memberSession.getId(), ex);
-            }
-        }
+        publisher.publishAfterCommit(new ChatEvent(ChatEventKind.MESSAGE, roomId, null, messageNode(saved, requestId)));
     }
 
     private void handlePing(WebSocketSession session, String requestId) throws IOException {
@@ -168,7 +176,7 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
         SessionRegistry.send(session, objectMapper.writeValueAsString(pong));
     }
 
-    private void handleTyping(WebSocketSession session, JsonNode root, String requestId) throws IOException {
+    private void handleTyping(WebSocketSession session, JsonNode root, String requestId) {
         UUID roomId = requireRoomId(root);
         if (!sessionRegistry.isJoined(session, roomId)) {
             return;
@@ -181,14 +189,15 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
         payload.put("username", sessionRegistry.username(session));
         payload.put("isTyping", isTyping);
         putRequestId(payload, requestId);
-        String json = objectMapper.writeValueAsString(payload);
-        for (WebSocketSession other : sessionRegistry.sessionsInRoomExcept(roomId, session)) {
-            try {
-                SessionRegistry.send(other, json);
-            } catch (IOException ex) {
-                log.warn("Failed to send typing to session {}", other.getId(), ex);
-            }
+        publisher.publish(new ChatEvent(ChatEventKind.TYPING, roomId, session.getId(), payload));
+    }
+
+    private boolean subscribeLocalAndPresence(WebSocketSession session, UUID roomId, UUID userId) {
+        if (sessionRegistry.isJoined(session, roomId)) {
+            return false;
         }
+        sessionRegistry.joinRoom(session, roomId);
+        return presenceService.join(roomId, userId, sessionRegistry.username(session));
     }
 
     private void sendHistorySync(
@@ -235,7 +244,7 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
         payload.put("type", "PRESENCE_SNAPSHOT");
         payload.put("roomId", roomId.toString());
         ArrayNode online = payload.putArray("online");
-        for (SessionRegistry.PresenceUser user : sessionRegistry.onlineInRoom(roomId)) {
+        for (PresenceService.OnlineUser user : presenceService.onlineInRoom(roomId)) {
             ObjectNode item = online.addObject();
             item.put("userId", user.userId().toString());
             item.put("username", user.username());
@@ -253,25 +262,14 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
         SessionRegistry.send(session, objectMapper.writeValueAsString(ack));
     }
 
-    private void broadcastPresence(UUID roomId, UUID userId, String username, String status) {
+    private void publishPresence(UUID roomId, UUID userId, String username, String status) {
         ObjectNode payload = objectMapper.createObjectNode();
         payload.put("type", "PRESENCE");
         payload.put("roomId", roomId.toString());
         payload.put("userId", userId.toString());
         payload.put("username", username);
         payload.put("status", status);
-        try {
-            String json = objectMapper.writeValueAsString(payload);
-            for (WebSocketSession memberSession : sessionRegistry.sessionsInRoom(roomId)) {
-                try {
-                    SessionRegistry.send(memberSession, json);
-                } catch (IOException ex) {
-                    log.warn("Failed to send presence to session {}", memberSession.getId(), ex);
-                }
-            }
-        } catch (IOException ex) {
-            log.warn("Failed to serialize presence event", ex);
-        }
+        publisher.publish(new ChatEvent(ChatEventKind.PRESENCE, roomId, null, payload));
     }
 
     private void emitOfflineForSession(WebSocketSession session) {
@@ -286,9 +284,17 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
         Set<UUID> rooms = sessionRegistry.roomsOf(session);
         sessionRegistry.removeSession(session);
         for (UUID roomId : rooms) {
-            if (!sessionRegistry.isUserInRoom(userId, roomId)) {
-                broadcastPresence(roomId, userId, username, "OFFLINE");
+            if (presenceService.leave(roomId, userId)) {
+                publishPresence(roomId, userId, username, "OFFLINE");
             }
+        }
+    }
+
+    private void heartbeatPresence(WebSocketSession session) {
+        try {
+            presenceService.heartbeat(sessionRegistry.requireUser(session), sessionRegistry.roomsOf(session));
+        } catch (IllegalStateException ignored) {
+            // session not registered
         }
     }
 

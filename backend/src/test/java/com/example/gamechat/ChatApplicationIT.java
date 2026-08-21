@@ -1,6 +1,9 @@
 package com.example.gamechat;
 
 import com.example.gamechat.auth.dto.AuthResponse;
+import com.example.gamechat.chat.bus.ChatEvent;
+import com.example.gamechat.chat.bus.ChatEventKind;
+import com.example.gamechat.chat.bus.RedisConfig;
 import com.example.gamechat.chat.dto.MessageResponse;
 import com.example.gamechat.common.dto.PageResponse;
 import com.example.gamechat.room.dto.MemberResponse;
@@ -19,6 +22,7 @@ import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.web.socket.TextMessage;
@@ -26,9 +30,11 @@ import org.springframework.web.socket.WebSocketHttpHeaders;
 import org.springframework.web.socket.WebSocketSession;
 import org.springframework.web.socket.client.standard.StandardWebSocketClient;
 import org.springframework.web.socket.handler.TextWebSocketHandler;
+import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
+import org.testcontainers.utility.DockerImageName;
 
 import java.net.URI;
 import java.time.Duration;
@@ -48,11 +54,17 @@ class ChatApplicationIT {
     @Container
     static final PostgreSQLContainer<?> POSTGRES = new PostgreSQLContainer<>("postgres:16-alpine");
 
+    @Container
+    static final GenericContainer<?> REDIS = new GenericContainer<>(DockerImageName.parse("redis:7-alpine"))
+            .withExposedPorts(6379);
+
     @DynamicPropertySource
     static void datasourceProps(DynamicPropertyRegistry registry) {
         registry.add("spring.datasource.url", POSTGRES::getJdbcUrl);
         registry.add("spring.datasource.username", POSTGRES::getUsername);
         registry.add("spring.datasource.password", POSTGRES::getPassword);
+        registry.add("spring.data.redis.host", REDIS::getHost);
+        registry.add("spring.data.redis.port", () -> REDIS.getMappedPort(6379));
         registry.add("jwt.secret", () -> "test-secret-must-be-at-least-32-chars-long");
     }
 
@@ -64,6 +76,9 @@ class ChatApplicationIT {
 
     @Autowired
     ObjectMapper objectMapper;
+
+    @Autowired
+    StringRedisTemplate redis;
 
     @Test
     void restAuthRoomsAndHistory() {
@@ -259,6 +274,37 @@ class ChatApplicationIT {
             } finally {
                 bobSession.close();
             }
+        } finally {
+            aliceSession.close();
+        }
+    }
+
+    @Test
+    void redisFanoutDeliversToLocalSockets() throws Exception {
+        AuthResponse alice = register("fanout_alice", "fanout.alice@example.com");
+        RoomResponse room = createRoom(alice.token(), "Fanout Arena");
+
+        CollectingHandler aliceHandler = new CollectingHandler();
+        WebSocketSession aliceSession = connect(alice.token(), aliceHandler);
+        try {
+            waitForType(aliceHandler, "CONNECTED");
+            aliceSession.sendMessage(joinPayload(room.id(), "req-join-a"));
+            waitForType(aliceHandler, "JOINED");
+
+            var body = objectMapper.createObjectNode();
+            body.put("type", "MESSAGE");
+            body.put("messageId", UUID.randomUUID().toString());
+            body.put("roomId", room.id().toString());
+            body.put("senderId", alice.userId().toString());
+            body.put("content", "from redis bus");
+            body.put("timestamp", "2026-08-20T12:00:00Z");
+            body.put("sequenceNumber", 99);
+            ChatEvent event = new ChatEvent(ChatEventKind.MESSAGE, room.id(), null, body);
+            redis.convertAndSend(RedisConfig.CHANNEL, objectMapper.writeValueAsString(event));
+
+            JsonNode delivered = waitForType(aliceHandler, "MESSAGE");
+            assertThat(delivered.path("content").asText()).isEqualTo("from redis bus");
+            assertThat(delivered.path("sequenceNumber").asLong()).isEqualTo(99);
         } finally {
             aliceSession.close();
         }

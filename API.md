@@ -1,6 +1,6 @@
-# Game Chat Room Service — API Guide (V2)
+# Game Chat Room Service — API Guide (V3)
 
-Base URL: `http://localhost:8080`
+Base URL: `http://localhost:8080` (nginx gateway in front of `chat-a` and `chat-b`)
 
 Start the stack first:
 
@@ -676,7 +676,7 @@ After a successful send, `GET /api/rooms/{roomId}/messages` returns that row wit
 
 ---
 
-## Typical V2 flow
+## Typical V3 flow
 
 1. `POST /api/auth/register` as alice → save `token` and `userId`
 2. `POST /api/rooms` with alice's token → save room `id`
@@ -685,9 +685,11 @@ After a successful send, `GET /api/rooms/{roomId}/messages` returns that row wit
 5. `POST /api/rooms/{roomId}/join` as bob
 6. Alice opens a WebSocket, `JOIN_ROOM`, `SEND_MESSAGE` while Bob is disconnected
 7. Bob connects and `JOIN_ROOM` with `afterSequence: 0` → `HISTORY_SYNC` contains Alice's message
-8. Alice sends again → both sockets get live `MESSAGE`
+8. Alice sends again → both sockets get live `MESSAGE` (even if they are on different chat nodes)
 9. `GET /api/rooms/{roomId}/messages` as alice or bob → history contains both messages
 10. Same history call as a third user who never joined → `403`
+
+Live `MESSAGE`, `PRESENCE`, and `TYPING` frames go through Redis Pub/Sub. Persist `ACK`, `HISTORY_SYNC`, `JOINED`, `LEFT`, `PONG`, and `ERROR` stay on the node that handled the socket. There is no Kafka.
 
 ---
 
