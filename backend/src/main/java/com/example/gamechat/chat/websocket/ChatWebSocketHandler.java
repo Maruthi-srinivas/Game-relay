@@ -7,10 +7,13 @@ import com.example.gamechat.auth.security.UserPrincipal;
 import com.example.gamechat.chat.bus.ChatEvent;
 import com.example.gamechat.chat.bus.ChatEventKind;
 import com.example.gamechat.chat.bus.ChatEventPublisher;
+import com.example.gamechat.chat.dto.AttachmentResponse;
 import com.example.gamechat.chat.dto.MessageResponse;
+import com.example.gamechat.chat.dto.ReactionResponse;
 import com.example.gamechat.chat.dto.SyncBatch;
 import com.example.gamechat.chat.entity.Message;
 import com.example.gamechat.chat.service.ChatService;
+import com.example.gamechat.chat.service.MessageService;
 import com.example.gamechat.chat.service.PresenceService;
 import com.example.gamechat.common.exception.ApiException;
 import com.example.gamechat.room.service.RoomService;
@@ -38,6 +41,7 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
 
     private final SessionRegistry sessionRegistry;
     private final ChatService chatService;
+    private final MessageService messageService;
     private final PresenceService presenceService;
     private final ChatEventPublisher publisher;
     private final ObjectMapper objectMapper;
@@ -49,6 +53,7 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
     public ChatWebSocketHandler(
             SessionRegistry sessionRegistry,
             ChatService chatService,
+            MessageService messageService,
             PresenceService presenceService,
             ChatEventPublisher publisher,
             ObjectMapper objectMapper,
@@ -59,6 +64,7 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
     ) {
         this.sessionRegistry = sessionRegistry;
         this.chatService = chatService;
+        this.messageService = messageService;
         this.presenceService = presenceService;
         this.publisher = publisher;
         this.objectMapper = objectMapper;
@@ -107,9 +113,10 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
                 case "SET_PRESENCE" -> handleSetPresence(session, root, requestId);
                 case "DELETE_MESSAGE" -> handleDelete(session, root, requestId);
                 case "EDIT_MESSAGE" -> handleEdit(session, root, requestId);
-                case "MESSAGE_ACK" -> {
-                    // client delivery ack; ephemeral
-                }
+                case "MESSAGE_ACK" -> handleAck(session, root);
+                case "MARK_READ" -> handleMarkRead(session, root, requestId);
+                case "ADD_REACTION" -> handleAddReaction(session, root, requestId);
+                case "REMOVE_REACTION" -> handleRemoveReaction(session, root, requestId);
                 default -> sendError(session, requestId, "UNSUPPORTED_TYPE", "Unsupported event type: " + type);
             }
         } catch (ApiException ex) {
@@ -219,9 +226,14 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
             }
         }
         String content = text(root, "content");
-        Message saved = chatService.sendMessage(userId, roomId, content);
+        Message saved = chatService.sendMessage(userId, roomId, content, requestId);
         sendAck(session, saved, requestId);
-        publisher.publishAfterCommit(new ChatEvent(ChatEventKind.MESSAGE, roomId, null, messageNode(saved, requestId)));
+        publisher.publishAfterCommit(new ChatEvent(
+                ChatEventKind.MESSAGE,
+                roomId,
+                null,
+                messageNode(messageService.toResponse(saved), requestId)
+        ));
     }
 
     private void handlePing(WebSocketSession session, String requestId) throws IOException {
@@ -288,6 +300,80 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
         payload.put("editedAt", edited.getEditedAt().toString());
         putRequestId(payload, requestId);
         publisher.publish(new ChatEvent(ChatEventKind.MESSAGE_EDITED, roomId, null, payload));
+    }
+
+    private void handleAck(WebSocketSession session, JsonNode root) {
+        UUID roomId = requireRoomId(root);
+        UUID userId = sessionRegistry.requireUser(session);
+        long sequence = root.path("sequenceNumber").asLong(-1);
+        if (sequence < 0 && root.hasNonNull("messageId")) {
+            return;
+        }
+        if (sequence >= 0) {
+            chatService.markRead(userId, roomId, sequence);
+            ObjectNode payload = objectMapper.createObjectNode();
+            payload.put("type", "READ");
+            payload.put("roomId", roomId.toString());
+            payload.put("userId", userId.toString());
+            payload.put("sequenceNumber", sequence);
+            publisher.publish(new ChatEvent(ChatEventKind.READ, roomId, session.getId(), payload));
+        }
+        ObjectNode delivery = objectMapper.createObjectNode();
+        delivery.put("type", "DELIVERY");
+        delivery.put("roomId", roomId.toString());
+        delivery.put("userId", userId.toString());
+        if (root.hasNonNull("messageId")) {
+            delivery.put("messageId", root.get("messageId").asText());
+        }
+        publisher.publish(new ChatEvent(ChatEventKind.DELIVERY, roomId, session.getId(), delivery));
+    }
+
+    private void handleMarkRead(WebSocketSession session, JsonNode root, String requestId) {
+        UUID roomId = requireRoomId(root);
+        UUID userId = sessionRegistry.requireUser(session);
+        long sequence = root.path("sequenceNumber").asLong(0);
+        chatService.markRead(userId, roomId, sequence);
+        ObjectNode payload = objectMapper.createObjectNode();
+        payload.put("type", "READ");
+        payload.put("roomId", roomId.toString());
+        payload.put("userId", userId.toString());
+        payload.put("sequenceNumber", sequence);
+        putRequestId(payload, requestId);
+        publisher.publish(new ChatEvent(ChatEventKind.READ, roomId, session.getId(), payload));
+    }
+
+    private void handleAddReaction(WebSocketSession session, JsonNode root, String requestId) {
+        UUID roomId = requireRoomId(root);
+        UUID userId = sessionRegistry.requireUser(session);
+        UUID messageId = requireUuid(root, "messageId");
+        String emoji = text(root, "emoji");
+        chatService.addReaction(userId, roomId, messageId, emoji);
+        ObjectNode payload = objectMapper.createObjectNode();
+        payload.put("type", "REACTION");
+        payload.put("action", "ADD");
+        payload.put("roomId", roomId.toString());
+        payload.put("messageId", messageId.toString());
+        payload.put("userId", userId.toString());
+        payload.put("emoji", emoji);
+        putRequestId(payload, requestId);
+        publisher.publish(new ChatEvent(ChatEventKind.REACTION, roomId, null, payload));
+    }
+
+    private void handleRemoveReaction(WebSocketSession session, JsonNode root, String requestId) {
+        UUID roomId = requireRoomId(root);
+        UUID userId = sessionRegistry.requireUser(session);
+        UUID messageId = requireUuid(root, "messageId");
+        String emoji = text(root, "emoji");
+        chatService.removeReaction(userId, roomId, messageId, emoji);
+        ObjectNode payload = objectMapper.createObjectNode();
+        payload.put("type", "REACTION");
+        payload.put("action", "REMOVE");
+        payload.put("roomId", roomId.toString());
+        payload.put("messageId", messageId.toString());
+        payload.put("userId", userId.toString());
+        payload.put("emoji", emoji);
+        putRequestId(payload, requestId);
+        publisher.publish(new ChatEvent(ChatEventKind.REACTION, roomId, null, payload));
     }
 
     private boolean subscribeLocalAndPresence(WebSocketSession session, UUID roomId, UUID userId) {
@@ -418,16 +504,7 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
     }
 
     private ObjectNode messageNode(Message saved, String requestId) {
-        ObjectNode payload = objectMapper.createObjectNode();
-        payload.put("type", "MESSAGE");
-        payload.put("messageId", saved.getId().toString());
-        payload.put("roomId", saved.getRoomId().toString());
-        payload.put("senderId", saved.getSenderId().toString());
-        payload.put("content", saved.getContent());
-        payload.put("timestamp", saved.getCreatedAt().toString());
-        payload.put("sequenceNumber", saved.getSequenceNumber());
-        putRequestId(payload, requestId);
-        return payload;
+        return messageNode(messageService.toResponse(saved), requestId);
     }
 
     private ObjectNode messageNode(MessageResponse message, String requestId) {
@@ -436,10 +513,31 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
         payload.put("messageId", message.messageId().toString());
         payload.put("roomId", message.roomId().toString());
         payload.put("senderId", message.senderId().toString());
-        payload.put("content", message.content());
+        payload.put("content", message.content() == null ? "" : message.content());
         payload.put("timestamp", message.timestamp().toString());
         payload.put("sequenceNumber", message.sequenceNumber());
-        putRequestId(payload, requestId);
+        if (message.editedAt() != null) {
+            payload.put("editedAt", message.editedAt().toString());
+        }
+        putRequestId(payload, requestId != null ? requestId : message.requestId());
+        ArrayNode attachments = payload.putArray("attachments");
+        for (AttachmentResponse attachment : message.attachments()) {
+            ObjectNode item = attachments.addObject();
+            item.put("id", attachment.id().toString());
+            item.put("contentType", attachment.contentType());
+            item.put("originalName", attachment.originalName());
+            item.put("sizeBytes", attachment.sizeBytes());
+        }
+        ArrayNode reactions = payload.putArray("reactions");
+        for (ReactionResponse reaction : message.reactions()) {
+            ObjectNode item = reactions.addObject();
+            item.put("emoji", reaction.emoji());
+            item.put("count", reaction.count());
+            ArrayNode userIds = item.putArray("userIds");
+            for (UUID userId : reaction.userIds()) {
+                userIds.add(userId.toString());
+            }
+        }
         return payload;
     }
 

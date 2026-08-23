@@ -9,6 +9,7 @@ import com.example.gamechat.chat.entity.Message;
 import com.example.gamechat.chat.repository.MessageRepository;
 import com.example.gamechat.common.exception.ApiException;
 import com.example.gamechat.kafka.ChatEventLog;
+import com.example.gamechat.room.dto.BanRequest;
 import com.example.gamechat.room.dto.CreatePrivateRequest;
 import com.example.gamechat.room.dto.CreateRoomRequest;
 import com.example.gamechat.room.dto.InviteResponse;
@@ -19,12 +20,16 @@ import com.example.gamechat.room.dto.ReportResponse;
 import com.example.gamechat.room.dto.RoomResponse;
 import com.example.gamechat.room.entity.Report;
 import com.example.gamechat.room.entity.Room;
+import com.example.gamechat.room.entity.RoomBan;
 import com.example.gamechat.room.entity.RoomInvite;
 import com.example.gamechat.room.entity.RoomMember;
 import com.example.gamechat.room.entity.RoomMemberId;
+import com.example.gamechat.room.entity.RoomReadCursor;
 import com.example.gamechat.room.repository.ReportRepository;
+import com.example.gamechat.room.repository.RoomBanRepository;
 import com.example.gamechat.room.repository.RoomInviteRepository;
 import com.example.gamechat.room.repository.RoomMemberRepository;
+import com.example.gamechat.room.repository.RoomReadCursorRepository;
 import com.example.gamechat.room.repository.RoomRepository;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -36,8 +41,11 @@ import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.function.Function;
+import java.util.stream.Collectors;
 
 @Service
 public class RoomService {
@@ -55,6 +63,8 @@ public class RoomService {
     private final UserRepository userRepository;
     private final RoomInviteRepository roomInviteRepository;
     private final ReportRepository reportRepository;
+    private final RoomBanRepository roomBanRepository;
+    private final RoomReadCursorRepository roomReadCursorRepository;
     private final MessageRepository messageRepository;
     private final ChatEventPublisher publisher;
     private final ChatEventLog chatEventLog;
@@ -66,6 +76,8 @@ public class RoomService {
             UserRepository userRepository,
             RoomInviteRepository roomInviteRepository,
             ReportRepository reportRepository,
+            RoomBanRepository roomBanRepository,
+            RoomReadCursorRepository roomReadCursorRepository,
             MessageRepository messageRepository,
             ChatEventPublisher publisher,
             ChatEventLog chatEventLog,
@@ -76,6 +88,8 @@ public class RoomService {
         this.userRepository = userRepository;
         this.roomInviteRepository = roomInviteRepository;
         this.reportRepository = reportRepository;
+        this.roomBanRepository = roomBanRepository;
+        this.roomReadCursorRepository = roomReadCursorRepository;
         this.messageRepository = messageRepository;
         this.publisher = publisher;
         this.chatEventLog = chatEventLog;
@@ -117,7 +131,7 @@ public class RoomService {
                 .orElseThrow(() -> ApiException.notFound("User not found"));
         String key = directKey(callerId, peer.getId());
         return roomRepository.findByDirectKey(key)
-                .map(this::toResponse)
+                .map(room -> toResponse(room, unreadCount(room, callerId)))
                 .orElseGet(() -> {
                     Room room = new Room();
                     room.setName(peer.getUsername());
@@ -144,6 +158,9 @@ public class RoomService {
         if (roomMemberRepository.existsByIdRoomIdAndIdUserId(global.getId(), userId)) {
             return;
         }
+        if (roomBanRepository.existsByIdRoomIdAndIdUserId(global.getId(), userId)) {
+            return;
+        }
         User user = userRepository.findById(userId)
                 .orElseThrow(() -> ApiException.notFound("User not found"));
         addMember(global, user, "MEMBER");
@@ -153,7 +170,7 @@ public class RoomService {
     @Transactional(readOnly = true)
     public RoomResponse get(UUID roomId, UUID userId) {
         Room room = requireMember(roomId, userId);
-        return toResponse(room);
+        return toResponse(room, unreadCount(room, userId));
     }
 
     @Transactional
@@ -161,8 +178,9 @@ public class RoomService {
         Room room = roomRepository.findById(roomId)
                 .orElseThrow(() -> ApiException.notFound("Room not found"));
         if (roomMemberRepository.existsByIdRoomIdAndIdUserId(roomId, userId)) {
-            return toResponse(room);
+            return toResponse(room, unreadCount(room, userId));
         }
+        rejectIfBanned(roomId, userId);
         enforceJoinRules(room, userId, request == null ? null : request.inviteCode());
         long memberCount = roomMemberRepository.countByIdRoomId(roomId);
         if (memberCount >= room.getMaxMembers()) {
@@ -246,6 +264,65 @@ public class RoomService {
     }
 
     @Transactional
+    public void ban(UUID roomId, UUID actorId, UUID targetId, BanRequest request) {
+        requireModerator(roomId, actorId);
+        if (actorId.equals(targetId)) {
+            throw ApiException.badRequest("Cannot ban yourself");
+        }
+        RoomMember target = roomMemberRepository.findByIdRoomIdAndIdUserId(roomId, targetId)
+                .orElseThrow(() -> ApiException.notFound("Member not found"));
+        if ("OWNER".equals(target.getRole())) {
+            throw ApiException.forbidden("Cannot ban the owner");
+        }
+        String username = target.getUser().getUsername();
+        roomMemberRepository.delete(target);
+        if (!roomBanRepository.existsByIdRoomIdAndIdUserId(roomId, targetId)) {
+            Room room = requireExistingRoom(roomId);
+            User banned = userRepository.findById(targetId)
+                    .orElseThrow(() -> ApiException.notFound("User not found"));
+            User actor = userRepository.findById(actorId)
+                    .orElseThrow(() -> ApiException.notFound("User not found"));
+            RoomBan ban = new RoomBan();
+            ban.setId(new RoomMemberId(roomId, targetId));
+            ban.setRoom(room);
+            ban.setUser(banned);
+            ban.setBannedBy(actor);
+            ban.setReason(request == null || request.reason() == null ? null : request.reason().trim());
+            roomBanRepository.save(ban);
+        }
+        publishMembership(ChatEventKind.USER_LEFT, roomId, targetId, username);
+        chatEventLog.moderation("BAN", roomId, actorId, null);
+    }
+
+    @Transactional
+    public void unban(UUID roomId, UUID actorId, UUID targetId) {
+        requireModerator(roomId, actorId);
+        RoomBan ban = roomBanRepository.findById(new RoomMemberId(roomId, targetId))
+                .orElseThrow(() -> ApiException.notFound("Ban not found"));
+        roomBanRepository.delete(ban);
+        chatEventLog.moderation("UNBAN", roomId, actorId, null);
+    }
+
+    @Transactional
+    public void setRole(UUID roomId, UUID actorId, UUID targetId, String role) {
+        requireOwner(roomId, actorId);
+        if (actorId.equals(targetId)) {
+            throw ApiException.badRequest("Cannot change your own role");
+        }
+        RoomMember target = roomMemberRepository.findByIdRoomIdAndIdUserId(roomId, targetId)
+                .orElseThrow(() -> ApiException.notFound("Member not found"));
+        if ("OWNER".equals(target.getRole())) {
+            throw ApiException.forbidden("Cannot change the owner role");
+        }
+        String normalized = role == null ? "" : role.trim().toUpperCase(Locale.ROOT);
+        if (!Set.of("MODERATOR", "MEMBER").contains(normalized)) {
+            throw ApiException.badRequest("Role must be MODERATOR or MEMBER");
+        }
+        target.setRole(normalized);
+        chatEventLog.moderation("MODERATOR".equals(normalized) ? "PROMOTE" : "DEMOTE", roomId, actorId, null);
+    }
+
+    @Transactional
     public ReportResponse report(UUID roomId, UUID reporterId, ReportRequest request) {
         Room room = requireMember(roomId, reporterId);
         User reporter = userRepository.findById(reporterId)
@@ -254,6 +331,7 @@ public class RoomService {
         report.setRoom(room);
         report.setReporter(reporter);
         report.setReason(request.reason().trim());
+        report.setStatus("OPEN");
         if (request.targetUserId() != null) {
             report.setTargetUser(userRepository.findById(request.targetUserId())
                     .orElseThrow(() -> ApiException.notFound("User not found")));
@@ -268,13 +346,72 @@ public class RoomService {
         }
         reportRepository.save(report);
         chatEventLog.moderation("REPORT", roomId, reporterId, request.messageId());
-        return new ReportResponse(report.getId());
+        return toReportResponse(report);
+    }
+
+    @Transactional(readOnly = true)
+    public List<ReportResponse> listReports(UUID roomId, UUID actorId) {
+        requireModerator(roomId, actorId);
+        return reportRepository.findByRoom_IdOrderByCreatedAtDesc(roomId).stream()
+                .map(this::toReportResponse)
+                .toList();
+    }
+
+    @Transactional
+    public ReportResponse resolveReport(UUID roomId, UUID actorId, UUID reportId) {
+        requireModerator(roomId, actorId);
+        Report report = reportRepository.findById(reportId)
+                .orElseThrow(() -> ApiException.notFound("Report not found"));
+        if (!report.getRoom().getId().equals(roomId)) {
+            throw ApiException.notFound("Report not found");
+        }
+        User resolver = userRepository.findById(actorId)
+                .orElseThrow(() -> ApiException.notFound("User not found"));
+        report.setStatus("RESOLVED");
+        report.setResolvedAt(Instant.now());
+        report.setResolver(resolver);
+        chatEventLog.moderation(
+                "REPORT_RESOLVED",
+                roomId,
+                actorId,
+                report.getMessage() == null ? null : report.getMessage().getId()
+        );
+        return toReportResponse(report);
+    }
+
+    @Transactional
+    public void markRead(UUID roomId, UUID userId, long sequence) {
+        requireMember(roomId, userId);
+        Room room = requireExistingRoom(roomId);
+        long clamped = Math.max(0, Math.min(sequence, room.getLastSequence()));
+        RoomMemberId id = new RoomMemberId(roomId, userId);
+        RoomReadCursor cursor = roomReadCursorRepository.findById(id).orElseGet(() -> {
+            RoomReadCursor created = new RoomReadCursor();
+            created.setId(id);
+            return created;
+        });
+        if (clamped > cursor.getLastReadSequence()) {
+            cursor.setLastReadSequence(clamped);
+        }
+        roomReadCursorRepository.save(cursor);
     }
 
     @Transactional(readOnly = true)
     public List<RoomResponse> listForUser(UUID userId) {
-        return roomMemberRepository.findWithRoomsByUserId(userId).stream()
-                .map(member -> toResponse(member.getRoom()))
+        List<RoomMember> memberships = roomMemberRepository.findWithRoomsByUserId(userId);
+        List<UUID> roomIds = memberships.stream().map(member -> member.getRoom().getId()).toList();
+        Map<UUID, RoomReadCursor> cursors = roomIds.isEmpty()
+                ? Map.of()
+                : roomReadCursorRepository.findByIdUserIdAndIdRoomIdIn(userId, roomIds).stream()
+                .collect(Collectors.toMap(cursor -> cursor.getId().getRoomId(), Function.identity()));
+        return memberships.stream()
+                .map(member -> {
+                    Room room = member.getRoom();
+                    long lastRead = cursors.containsKey(room.getId())
+                            ? cursors.get(room.getId()).getLastReadSequence()
+                            : 0L;
+                    return toResponse(room, Math.max(0, room.getLastSequence() - lastRead));
+                })
                 .toList();
     }
 
@@ -359,6 +496,28 @@ public class RoomService {
         }
     }
 
+    private void requireOwner(UUID roomId, UUID userId) {
+        requireMember(roomId, userId);
+        RoomMember member = roomMemberRepository.findByIdRoomIdAndIdUserId(roomId, userId)
+                .orElseThrow(() -> ApiException.forbidden("Not a member of this room"));
+        if (!"OWNER".equals(member.getRole())) {
+            throw ApiException.forbidden("Owner access required");
+        }
+    }
+
+    private void rejectIfBanned(UUID roomId, UUID userId) {
+        if (roomBanRepository.existsByIdRoomIdAndIdUserId(roomId, userId)) {
+            throw ApiException.forbidden("You are banned from this room");
+        }
+    }
+
+    private long unreadCount(Room room, UUID userId) {
+        long lastRead = roomReadCursorRepository.findById(new RoomMemberId(room.getId(), userId))
+                .map(RoomReadCursor::getLastReadSequence)
+                .orElse(0L);
+        return Math.max(0, room.getLastSequence() - lastRead);
+    }
+
     private void transferOrClose(Room room, UUID leavingOwnerId) {
         List<RoomMember> remaining = roomMemberRepository.findByIdRoomIdOrderByJoinedAtAsc(room.getId());
         remaining = remaining.stream()
@@ -401,7 +560,25 @@ public class RoomService {
         }
     }
 
+    private ReportResponse toReportResponse(Report report) {
+        return new ReportResponse(
+                report.getId(),
+                report.getRoom().getId(),
+                report.getReporter().getId(),
+                report.getTargetUser() == null ? null : report.getTargetUser().getId(),
+                report.getMessage() == null ? null : report.getMessage().getId(),
+                report.getReason(),
+                report.getStatus(),
+                report.getCreatedAt(),
+                report.getResolvedAt()
+        );
+    }
+
     private RoomResponse toResponse(Room room) {
+        return toResponse(room, 0);
+    }
+
+    private RoomResponse toResponse(Room room, long unreadCount) {
         return new RoomResponse(
                 room.getId(),
                 room.getName(),
@@ -409,7 +586,8 @@ public class RoomService {
                 room.getOwner().getId(),
                 room.getMaxMembers(),
                 room.getCreatedAt(),
-                room.getUpdatedAt()
+                room.getUpdatedAt(),
+                unreadCount
         );
     }
 

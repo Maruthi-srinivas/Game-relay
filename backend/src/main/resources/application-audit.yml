@@ -1,0 +1,11 @@
+spring:
+  kafka:
+    listener:
+      auto-startup: true
+    consumer:
+      group-id: gamechat-audit
+      auto-offset-reset: earliest
+app:
+  kafka:
+    enabled: true
+    log-listener: false

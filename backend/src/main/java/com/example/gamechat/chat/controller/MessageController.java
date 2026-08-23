@@ -23,6 +23,16 @@ public class MessageController {
         this.messageService = messageService;
     }
 
+    @GetMapping("/search")
+    public PageResponse<MessageResponse> search(
+            @AuthenticationPrincipal UserPrincipal principal,
+            @PathVariable UUID roomId,
+            @RequestParam String q,
+            @RequestParam(defaultValue = "20") int size
+    ) {
+        return messageService.search(roomId, principal.userId(), q, size);
+    }
+
     @GetMapping
     public PageResponse<MessageResponse> history(
             @AuthenticationPrincipal UserPrincipal principal,

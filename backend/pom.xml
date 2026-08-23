@@ -15,12 +15,13 @@
     <artifactId>game-chat</artifactId>
     <version>1.0.0-SNAPSHOT</version>
     <name>game-chat</name>
-    <description>Game Chat Room Service V6</description>
+    <description>Game Chat Room Service V8</description>
 
     <properties>
         <java.version>21</java.version>
         <jjwt.version>0.12.6</jjwt.version>
         <testcontainers.version>1.21.3</testcontainers.version>
+        <aws.sdk.version>2.31.16</aws.sdk.version>
     </properties>
 
     <dependencies>
@@ -89,6 +90,11 @@
             <artifactId>jjwt-jackson</artifactId>
             <version>${jjwt.version}</version>
             <scope>runtime</scope>
+        </dependency>
+        <dependency>
+            <groupId>software.amazon.awssdk</groupId>
+            <artifactId>s3</artifactId>
+            <version>${aws.sdk.version}</version>
         </dependency>
         <dependency>
             <groupId>org.springframework.boot</groupId>

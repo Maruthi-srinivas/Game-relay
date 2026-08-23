@@ -1,6 +1,8 @@
 package com.example.gamechat.chat.service;
 
 import com.example.gamechat.chat.entity.Message;
+import com.example.gamechat.chat.repository.MessageAttachmentRepository;
+import com.example.gamechat.chat.repository.MessageReactionRepository;
 import com.example.gamechat.chat.repository.MessageRepository;
 import com.example.gamechat.common.exception.ApiException;
 import com.example.gamechat.room.entity.Room;
@@ -18,6 +20,8 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
@@ -29,12 +33,24 @@ class MessageServiceTest {
     private RoomRepository roomRepository;
     @Mock
     private RoomService roomService;
+    @Mock
+    private MessageReactionRepository reactionRepository;
+    @Mock
+    private MessageAttachmentRepository attachmentRepository;
 
     private MessageService messageService;
 
     @BeforeEach
     void setUp() {
-        messageService = new MessageService(messageRepository, roomRepository, roomService, 2000, 100);
+        messageService = new MessageService(
+                messageRepository,
+                roomRepository,
+                roomService,
+                reactionRepository,
+                attachmentRepository,
+                2000,
+                100
+        );
     }
 
     @Test
@@ -73,5 +89,24 @@ class MessageServiceTest {
         assertThat(saved.getSequenceNumber()).isEqualTo(4);
         assertThat(saved.getContent()).isEqualTo("hi");
         assertThat(room.getLastSequence()).isEqualTo(4);
+    }
+
+    @Test
+    void saveReturnsExistingForDuplicateRequestId() {
+        UUID roomId = UUID.randomUUID();
+        UUID senderId = UUID.randomUUID();
+        Message existing = new Message();
+        existing.setId(UUID.randomUUID());
+        existing.setRoomId(roomId);
+        existing.setSenderId(senderId);
+        existing.setRequestId("req-dup");
+        existing.setContent("hello");
+        when(messageRepository.findByRoomIdAndSenderIdAndRequestId(roomId, senderId, "req-dup"))
+                .thenReturn(Optional.of(existing));
+
+        Message saved = messageService.save(roomId, senderId, "hello again", "req-dup", false);
+
+        assertThat(saved).isSameAs(existing);
+        verify(messageRepository, never()).save(any());
     }
 }

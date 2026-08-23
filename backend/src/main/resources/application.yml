@@ -37,6 +37,10 @@ spring:
       value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
       auto-offset-reset: latest
       group-id: gamechat-log
+  servlet:
+    multipart:
+      max-file-size: 5MB
+      max-request-size: 6MB
 
 management:
   endpoints:
@@ -58,6 +62,18 @@ jwt:
 app:
   kafka:
     enabled: ${KAFKA_ENABLED:false}
+    log-listener: ${KAFKA_LOG_LISTENER:true}
+  prometheus:
+    username: ${PROM_USER:}
+    password: ${PROM_PASSWORD:}
+  s3:
+    enabled: ${S3_ENABLED:false}
+    endpoint: ${S3_ENDPOINT:http://localhost:9000}
+    region: ${S3_REGION:us-east-1}
+    access-key: ${S3_ACCESS_KEY:minio}
+    secret-key: ${S3_SECRET_KEY:minio12345}
+    bucket: ${S3_BUCKET:gamechat}
+    local-dir: ${S3_LOCAL_DIR:${java.io.tmpdir}/gamechat-objects}
   chat:
     max-message-length: 2000
     sync-batch-size: 100
@@ -66,7 +82,9 @@ app:
     typing-idle-ms: 3000
     presence-ttl-ms: 90000
     presence-sweep-ms: 15000
+    away-idle-ms: ${CHAT_AWAY_IDLE_MS:300000}
     send-rate-limit: 20
     send-rate-window-seconds: 10
     auth-rate-limit: 30
     auth-rate-window-seconds: 60
+

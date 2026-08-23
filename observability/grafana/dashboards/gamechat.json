@@ -83,6 +83,19 @@
           "legendFormat": "{{instance}}"
         }
       ]
+    },
+    {
+      "id": 7,
+      "type": "logs",
+      "title": "Service logs",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 22 },
+      "datasource": { "type": "loki", "uid": "loki" },
+      "targets": [
+        {
+          "expr": "{container=~\"chat-a|chat-b|gateway|frontend|audit-consumer\"}",
+          "legendFormat": "{{container}}"
+        }
+      ]
     }
   ],
   "schemaVersion": 39,

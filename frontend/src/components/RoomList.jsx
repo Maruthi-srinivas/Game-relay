@@ -26,6 +26,7 @@ export default function RoomList({ selectedId }) {
             >
               <span className="room-glyph">{roomTypeGlyph(room.type)}</span>
               <span className="room-name">{room.name}</span>
+              {room.unreadCount > 0 ? <span className="unread-badge">{room.unreadCount > 99 ? "99+" : room.unreadCount}</span> : null}
             </NavLink>
           ))
         )}

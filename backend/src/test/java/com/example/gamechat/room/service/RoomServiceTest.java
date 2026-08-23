@@ -11,8 +11,10 @@ import com.example.gamechat.room.dto.RoomResponse;
 import com.example.gamechat.room.entity.Room;
 import com.example.gamechat.room.entity.RoomMember;
 import com.example.gamechat.room.repository.ReportRepository;
+import com.example.gamechat.room.repository.RoomBanRepository;
 import com.example.gamechat.room.repository.RoomInviteRepository;
 import com.example.gamechat.room.repository.RoomMemberRepository;
+import com.example.gamechat.room.repository.RoomReadCursorRepository;
 import com.example.gamechat.room.repository.RoomRepository;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
@@ -29,6 +31,7 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -48,6 +51,10 @@ class RoomServiceTest {
     @Mock
     private ReportRepository reportRepository;
     @Mock
+    private RoomBanRepository roomBanRepository;
+    @Mock
+    private RoomReadCursorRepository roomReadCursorRepository;
+    @Mock
     private MessageRepository messageRepository;
     @Mock
     private ChatEventPublisher publisher;
@@ -66,6 +73,8 @@ class RoomServiceTest {
                 userRepository,
                 roomInviteRepository,
                 reportRepository,
+                roomBanRepository,
+                roomReadCursorRepository,
                 messageRepository,
                 publisher,
                 chatEventLog,
@@ -125,6 +134,20 @@ class RoomServiceTest {
     }
 
     @Test
+    void joinRejectsBannedUser() {
+        UUID roomId = UUID.randomUUID();
+        UUID joinerId = UUID.randomUUID();
+        when(roomRepository.findById(roomId)).thenReturn(Optional.of(room(roomId)));
+        when(roomMemberRepository.existsByIdRoomIdAndIdUserId(roomId, joinerId)).thenReturn(false);
+        when(roomBanRepository.existsByIdRoomIdAndIdUserId(roomId, joinerId)).thenReturn(true);
+
+        assertThatThrownBy(() -> roomService.join(roomId, joinerId, null))
+                .isInstanceOf(ApiException.class)
+                .extracting(ex -> ((ApiException) ex).getCode())
+                .isEqualTo("FORBIDDEN");
+    }
+
+    @Test
     void requireMemberRejectsStrangers() {
         UUID roomId = UUID.randomUUID();
         when(roomRepository.findById(roomId)).thenReturn(Optional.of(room(roomId)));
@@ -143,6 +166,7 @@ class RoomServiceTest {
         RoomMember member = new RoomMember();
         member.setRoom(room);
         when(roomMemberRepository.findWithRoomsByUserId(ownerId)).thenReturn(List.of(member));
+        when(roomReadCursorRepository.findByIdUserIdAndIdRoomIdIn(eq(ownerId), any())).thenReturn(List.of());
 
         List<RoomResponse> rooms = roomService.listForUser(ownerId);
 

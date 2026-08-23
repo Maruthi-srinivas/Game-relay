@@ -234,6 +234,26 @@ public class SessionRegistry {
         return idle;
     }
 
+    public record IdleUser(UUID userId, String username) {
+    }
+
+    public List<IdleUser> idleAuthenticatedUsers(Instant cutoff) {
+        Map<UUID, Instant> latest = new LinkedHashMap<>();
+        Map<UUID, String> names = new LinkedHashMap<>();
+        for (Map.Entry<String, UUID> entry : userBySession.entrySet()) {
+            Instant seen = lastSeenBySession.getOrDefault(entry.getKey(), Instant.EPOCH);
+            latest.merge(entry.getValue(), seen, (a, b) -> a.isAfter(b) ? a : b);
+            names.putIfAbsent(entry.getValue(), usernameBySession.getOrDefault(entry.getKey(), "unknown"));
+        }
+        List<IdleUser> idle = new ArrayList<>();
+        for (Map.Entry<UUID, Instant> entry : latest.entrySet()) {
+            if (entry.getValue().isBefore(cutoff)) {
+                idle.add(new IdleUser(entry.getKey(), names.getOrDefault(entry.getKey(), "unknown")));
+            }
+        }
+        return idle;
+    }
+
     public static void send(WebSocketSession session, String payload) throws IOException {
         synchronized (session) {
             if (session.isOpen()) {

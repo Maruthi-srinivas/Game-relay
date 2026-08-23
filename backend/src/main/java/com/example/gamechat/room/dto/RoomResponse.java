@@ -10,6 +10,7 @@ public record RoomResponse(
         UUID ownerId,
         int maxMembers,
         Instant createdAt,
-        Instant updatedAt
+        Instant updatedAt,
+        long unreadCount
 ) {
 }

@@ -2,6 +2,7 @@ package com.example.gamechat.room.controller;
 
 import com.example.gamechat.auth.security.UserPrincipal;
 import com.example.gamechat.chat.websocket.ChatWebSocketHandler;
+import com.example.gamechat.room.dto.BanRequest;
 import com.example.gamechat.room.dto.CreatePrivateRequest;
 import com.example.gamechat.room.dto.CreateRoomRequest;
 import com.example.gamechat.room.dto.InviteResponse;
@@ -143,6 +144,65 @@ public class RoomController {
             @Valid @RequestBody ReportRequest request
     ) {
         return roomService.report(roomId, principal.userId(), request);
+    }
+
+    @PostMapping("/{roomId}/members/{userId}/ban")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void ban(
+            @AuthenticationPrincipal UserPrincipal principal,
+            @PathVariable UUID roomId,
+            @PathVariable UUID userId,
+            @RequestBody(required = false) BanRequest request
+    ) {
+        roomService.ban(roomId, principal.userId(), userId, request);
+        chatWebSocketHandler.dropUserFromRoom(userId, roomId);
+    }
+
+    @PostMapping("/{roomId}/members/{userId}/unban")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void unban(
+            @AuthenticationPrincipal UserPrincipal principal,
+            @PathVariable UUID roomId,
+            @PathVariable UUID userId
+    ) {
+        roomService.unban(roomId, principal.userId(), userId);
+    }
+
+    @PostMapping("/{roomId}/members/{userId}/promote")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void promote(
+            @AuthenticationPrincipal UserPrincipal principal,
+            @PathVariable UUID roomId,
+            @PathVariable UUID userId
+    ) {
+        roomService.setRole(roomId, principal.userId(), userId, "MODERATOR");
+    }
+
+    @PostMapping("/{roomId}/members/{userId}/demote")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void demote(
+            @AuthenticationPrincipal UserPrincipal principal,
+            @PathVariable UUID roomId,
+            @PathVariable UUID userId
+    ) {
+        roomService.setRole(roomId, principal.userId(), userId, "MEMBER");
+    }
+
+    @GetMapping("/{roomId}/reports")
+    public List<ReportResponse> reports(
+            @AuthenticationPrincipal UserPrincipal principal,
+            @PathVariable UUID roomId
+    ) {
+        return roomService.listReports(roomId, principal.userId());
+    }
+
+    @PostMapping("/{roomId}/reports/{reportId}/resolve")
+    public ReportResponse resolveReport(
+            @AuthenticationPrincipal UserPrincipal principal,
+            @PathVariable UUID roomId,
+            @PathVariable UUID reportId
+    ) {
+        return roomService.resolveReport(roomId, principal.userId(), reportId);
     }
 
     @GetMapping("/{roomId}/members")

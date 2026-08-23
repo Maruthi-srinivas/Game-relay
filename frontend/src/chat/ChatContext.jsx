@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
-import { listMessages } from "../api/messages.js";
-import { createRoom, createInvite, createPrivateRoom, getRoom, joinByCode, joinRoom, kickMember, leaveRoom, listMembers, listRooms, muteMember, reportMember, unmuteMember } from "../api/rooms.js";
+import { listMessages, searchMessages, uploadAttachment } from "../api/messages.js";
+import { banMember, createRoom, createInvite, createPrivateRoom, demoteMember, getRoom, joinByCode, joinRoom, kickMember, leaveRoom, listMembers, listReports, listRooms, muteMember, promoteMember, reportMember, resolveReport, unbanMember, unmuteMember } from "../api/rooms.js";
 import { connectChat } from "../ws/chatSocket.js";
 import { useAuth } from "../auth/AuthContext.jsx";
 
@@ -8,6 +8,8 @@ const ChatContext = createContext(null);
 const HISTORY_PAGE_SIZE = 50;
 const CATCHUP_SIZE = 100;
 const TYPING_IDLE_MS = 3000;
+const AWAY_IDLE_MS = 300000;
+const QUICK_EMOJIS = ["👍", "❤️", "😂", "🔥", "😮"];
 
 function maxSequence(messages) {
   let max = 0;
@@ -318,8 +320,67 @@ export function ChatProvider({ children }) {
           setMessages((prev) => prev.filter((msg) => msg.requestId !== pendingId || msg.messageId));
         }
         ingestMessages([event], event.roomId);
+        if (event.roomId === currentRoom) {
+          const seq = event.sequenceNumber || lastSeqRef.current[event.roomId] || 0;
+          const socket = socketRef.current;
+          if (seq && socket?.readyState === WebSocket.OPEN) {
+            socket.markRead(event.roomId, seq);
+          }
+        } else if (event.roomId) {
+          setRooms((prev) =>
+            prev.map((item) =>
+              item.id === event.roomId ? { ...item, unreadCount: (item.unreadCount || 0) + 1 } : item
+            )
+          );
+        }
         break;
       }
+      case "REACTION":
+        if (event.roomId === currentRoom) {
+          setMessages((prev) =>
+            prev.map((msg) => {
+              if (msg.messageId !== event.messageId) {
+                return msg;
+              }
+              const reactions = [...(msg.reactions || [])];
+              const index = reactions.findIndex((row) => row.emoji === event.emoji);
+              const current = index >= 0 ? reactions[index] : { emoji: event.emoji, count: 0, userIds: [] };
+              const userIds = new Set(current.userIds || []);
+              if (event.action === "REMOVE") {
+                userIds.delete(event.userId);
+              } else {
+                userIds.add(event.userId);
+              }
+              const next = { emoji: event.emoji, count: userIds.size, userIds: [...userIds] };
+              if (index >= 0) {
+                if (next.count === 0) {
+                  reactions.splice(index, 1);
+                } else {
+                  reactions[index] = next;
+                }
+              } else if (next.count > 0) {
+                reactions.push(next);
+              }
+              return { ...msg, reactions };
+            })
+          );
+        }
+        break;
+      case "DELIVERY":
+        if (event.roomId === currentRoom && event.messageId) {
+          setMessages((prev) =>
+            prev.map((msg) => (msg.messageId === event.messageId ? { ...msg, delivered: true } : msg))
+          );
+        }
+        break;
+      case "READ":
+        if (event.roomId === currentRoom && event.userId !== userId) {
+          const seq = event.sequenceNumber || 0;
+          setMessages((prev) =>
+            prev.map((msg) => (msg.senderId === userId && (msg.sequenceNumber || 0) <= seq ? { ...msg, read: true } : msg))
+          );
+        }
+        break;
       case "ACK": {
         const pending = pendingRef.current[event.requestId];
         if (pending && event.roomId === currentRoom) {
@@ -445,6 +506,49 @@ export function ChatProvider({ children }) {
     refreshRooms().catch((err) => setError(err.message));
   }, [token, refreshRooms]);
 
+  useEffect(() => {
+    if (!token) {
+      return undefined;
+    }
+    let timer = null;
+    function arm() {
+      if (timer) {
+        clearTimeout(timer);
+      }
+      timer = setTimeout(() => {
+        setMyStatus((current) => {
+          if (current !== "ONLINE") {
+            return current;
+          }
+          socketRef.current?.setPresence("AWAY");
+          return "AWAY";
+        });
+      }, AWAY_IDLE_MS);
+    }
+    function onActivity() {
+      setMyStatus((current) => {
+        if (current !== "AWAY") {
+          return current;
+        }
+        socketRef.current?.setPresence("ONLINE");
+        return "ONLINE";
+      });
+      arm();
+    }
+    arm();
+    window.addEventListener("mousemove", onActivity);
+    window.addEventListener("keydown", onActivity);
+    window.addEventListener("click", onActivity);
+    return () => {
+      if (timer) {
+        clearTimeout(timer);
+      }
+      window.removeEventListener("mousemove", onActivity);
+      window.removeEventListener("keydown", onActivity);
+      window.removeEventListener("click", onActivity);
+    };
+  }, [token]);
+
   const selectRoom = useCallback(async (roomId) => {
     const previous = roomIdRef.current;
     const socket = socketRef.current;
@@ -482,7 +586,11 @@ export function ChatProvider({ children }) {
       historyReadyRef.current = true;
       if (socketRef.current?.readyState === WebSocket.OPEN) {
         socketRef.current.joinRoom(roomId, after || 0);
+        if (after) {
+          socketRef.current.markRead(roomId, after);
+        }
       }
+      setRooms((prev) => prev.map((item) => (item.id === roomId ? { ...item, unreadCount: 0 } : item)));
     } catch (err) {
       if (roomIdRef.current === roomId) {
         setError(err.message);
@@ -548,6 +656,92 @@ export function ChatProvider({ children }) {
     }
     return reportMember(token, roomId, body);
   }, [token]);
+
+  const ban = useCallback(async (userId, reason) => {
+    const roomId = roomIdRef.current;
+    if (!roomId) {
+      return;
+    }
+    await banMember(token, roomId, userId, reason);
+    await refreshMembers(roomId);
+  }, [token, refreshMembers]);
+
+  const unban = useCallback(async (userId) => {
+    const roomId = roomIdRef.current;
+    if (!roomId) {
+      return;
+    }
+    await unbanMember(token, roomId, userId);
+  }, [token]);
+
+  const promote = useCallback(async (userId) => {
+    const roomId = roomIdRef.current;
+    if (!roomId) {
+      return;
+    }
+    await promoteMember(token, roomId, userId);
+    await refreshMembers(roomId);
+  }, [token, refreshMembers]);
+
+  const demote = useCallback(async (userId) => {
+    const roomId = roomIdRef.current;
+    if (!roomId) {
+      return;
+    }
+    await demoteMember(token, roomId, userId);
+    await refreshMembers(roomId);
+  }, [token, refreshMembers]);
+
+  const loadReports = useCallback(async () => {
+    const roomId = roomIdRef.current;
+    if (!token || !roomId) {
+      return [];
+    }
+    return listReports(token, roomId);
+  }, [token]);
+
+  const resolveInboxReport = useCallback(async (reportId) => {
+    const roomId = roomIdRef.current;
+    if (!roomId) {
+      return;
+    }
+    return resolveReport(token, roomId, reportId);
+  }, [token]);
+
+  const searchChat = useCallback(async (query) => {
+    const roomId = roomIdRef.current;
+    if (!token || !roomId || !query?.trim()) {
+      return [];
+    }
+    const page = await searchMessages(token, roomId, query.trim());
+    return page?.content || [];
+  }, [token]);
+
+  const attachFile = useCallback(async (file, caption) => {
+    const roomId = roomIdRef.current;
+    if (!token || !roomId || !file) {
+      return;
+    }
+    const saved = await uploadAttachment(token, roomId, file, caption);
+    ingestMessages([saved], roomId);
+    return saved;
+  }, [token, ingestMessages]);
+
+  const toggleReaction = useCallback((messageId, emoji) => {
+    const roomId = roomIdRef.current;
+    const socket = socketRef.current;
+    if (!roomId || !socket || socket.readyState !== WebSocket.OPEN) {
+      return;
+    }
+    const message = messages.find((item) => item.messageId === messageId);
+    const existing = (message?.reactions || []).find((row) => row.emoji === emoji);
+    const mine = existing?.userIds?.includes(userId);
+    if (mine) {
+      socket.removeReaction(roomId, messageId, emoji);
+    } else {
+      socket.addReaction(roomId, messageId, emoji);
+    }
+  }, [messages, userId]);
 
   const setPresence = useCallback((status) => {
     const socket = socketRef.current;
@@ -651,12 +845,22 @@ export function ChatProvider({ children }) {
       kick,
       mute,
       report,
+      ban,
+      unban,
+      promote,
+      demote,
+      loadReports,
+      resolveInboxReport,
+      searchChat,
+      attachFile,
+      toggleReaction,
       setPresence,
       deleteChat,
       sendChat,
       sendTyping,
       loadOlderHistory,
       clearError,
+      quickEmojis: QUICK_EMOJIS,
       minSequence: minSequence(messages),
     }),
     [
@@ -687,6 +891,15 @@ export function ChatProvider({ children }) {
       kick,
       mute,
       report,
+      ban,
+      unban,
+      promote,
+      demote,
+      loadReports,
+      resolveInboxReport,
+      searchChat,
+      attachFile,
+      toggleReaction,
       setPresence,
       deleteChat,
       sendChat,

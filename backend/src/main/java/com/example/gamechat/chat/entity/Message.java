@@ -22,8 +22,11 @@ public class Message {
     @Column(name = "sender_id", nullable = false)
     private UUID senderId;
 
-    @Column(nullable = false, length = 2000)
+    @Column(length = 2000)
     private String content;
+
+    @Column(name = "request_id", length = 64)
+    private String requestId;
 
     @Column(name = "sequence_number", nullable = false)
     private long sequenceNumber;
@@ -77,6 +80,14 @@ public class Message {
 
     public void setContent(String content) {
         this.content = content;
+    }
+
+    public String getRequestId() {
+        return requestId;
+    }
+
+    public void setRequestId(String requestId) {
+        this.requestId = requestId;
     }
 
     public long getSequenceNumber() {

@@ -94,8 +94,17 @@ export function connectChat({ token, onEvent, onState }) {
     leaveRoom(roomId) {
       return send({ type: "LEAVE_ROOM", roomId });
     },
-    sendMessage(roomId, content) {
-      return send({ type: "SEND_MESSAGE", roomId, content });
+    sendMessage(roomId, content, requestId) {
+      return send({ type: "SEND_MESSAGE", roomId, content, requestId });
+    },
+    markRead(roomId, sequenceNumber) {
+      return send({ type: "MARK_READ", roomId, sequenceNumber });
+    },
+    addReaction(roomId, messageId, emoji) {
+      return send({ type: "ADD_REACTION", roomId, messageId, emoji });
+    },
+    removeReaction(roomId, messageId, emoji) {
+      return send({ type: "REMOVE_REACTION", roomId, messageId, emoji });
     },
     typing(roomId, isTyping) {
       return send({ type: "TYPING", roomId, isTyping });

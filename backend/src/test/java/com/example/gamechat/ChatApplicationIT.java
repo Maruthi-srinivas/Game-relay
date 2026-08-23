@@ -22,8 +22,11 @@ import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
+import org.springframework.core.io.ByteArrayResource;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import org.springframework.util.LinkedMultiValueMap;
+import org.springframework.util.MultiValueMap;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
@@ -600,6 +603,193 @@ class ChatApplicationIT {
             aliceSession.close();
         }
     }
+
+    @Test
+    void banBlocksRejoin() {
+        AuthResponse alice = register("ban_alice", "ban.alice@example.com");
+        AuthResponse bob = register("ban_bob", "ban.bob@example.com");
+        RoomResponse room = createRoom(alice.token(), "Ban Arena");
+        joinRoom(bob.token(), room.id());
+        ResponseEntity<Void> banned = exchange(
+                alice.token(),
+                HttpMethod.POST,
+                "/api/rooms/" + room.id() + "/members/" + bob.userId() + "/ban",
+                null,
+                Void.class
+        );
+        assertThat(banned.getStatusCode()).isEqualTo(HttpStatus.NO_CONTENT);
+        ResponseEntity<String> rejoin = exchange(
+                bob.token(),
+                HttpMethod.POST,
+                "/api/rooms/" + room.id() + "/join",
+                null,
+                String.class
+        );
+        assertThat(rejoin.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
+    }
+
+    @Test
+    void promoteAllowsMute() {
+        AuthResponse alice = register("promo_alice", "promo.alice@example.com");
+        AuthResponse bob = register("promo_bob", "promo.bob@example.com");
+        AuthResponse carol = register("promo_carol", "promo.carol@example.com");
+        RoomResponse room = createRoom(alice.token(), "Promo Arena");
+        joinRoom(bob.token(), room.id());
+        joinRoom(carol.token(), room.id());
+        ResponseEntity<Void> promoted = exchange(
+                alice.token(),
+                HttpMethod.POST,
+                "/api/rooms/" + room.id() + "/members/" + bob.userId() + "/promote",
+                null,
+                Void.class
+        );
+        assertThat(promoted.getStatusCode()).isEqualTo(HttpStatus.NO_CONTENT);
+        ResponseEntity<Void> muted = exchange(
+                bob.token(),
+                HttpMethod.POST,
+                "/api/rooms/" + room.id() + "/members/" + carol.userId() + "/mute",
+                null,
+                Void.class
+        );
+        assertThat(muted.getStatusCode()).isEqualTo(HttpStatus.NO_CONTENT);
+    }
+
+    @Test
+    void duplicateRequestIdPersistsOnce() throws Exception {
+        AuthResponse alice = register("dup_alice", "dup.alice@example.com");
+        RoomResponse room = createRoom(alice.token(), "Idempotent Arena");
+        CollectingHandler handler = new CollectingHandler();
+        WebSocketSession session = connect(alice.token(), handler);
+        try {
+            waitForType(handler, "CONNECTED");
+            session.sendMessage(joinPayload(room.id(), "req-join-a"));
+            waitForType(handler, "JOINED");
+            session.sendMessage(sendPayload(room.id(), "req-dup", "once only"));
+            waitForType(handler, "MESSAGE");
+            session.sendMessage(sendPayload(room.id(), "req-dup", "once only"));
+            waitForType(handler, "ACK");
+            ResponseEntity<PageResponse<MessageResponse>> history = history(alice.token(), room.id());
+            assertThat(history.getStatusCode()).isEqualTo(HttpStatus.OK);
+            assertThat(history.getBody()).isNotNull();
+            assertThat(history.getBody().content()).hasSize(1);
+            assertThat(history.getBody().content().getFirst().content()).isEqualTo("once only");
+        } finally {
+            session.close();
+        }
+    }
+
+    @Test
+    void searchFindsPersistedMessage() throws Exception {
+        AuthResponse alice = register("srch_alice", "srch.alice@example.com");
+        RoomResponse room = createRoom(alice.token(), "Search Arena");
+        CollectingHandler handler = new CollectingHandler();
+        WebSocketSession session = connect(alice.token(), handler);
+        try {
+            waitForType(handler, "CONNECTED");
+            session.sendMessage(joinPayload(room.id(), "req-join-a"));
+            waitForType(handler, "JOINED");
+            session.sendMessage(sendPayload(room.id(), "req-1", "uniquephrasexyz visible"));
+            waitForType(handler, "MESSAGE");
+            ResponseEntity<PageResponse<MessageResponse>> found = rest.exchange(
+                    "/api/rooms/" + room.id() + "/messages/search?q=uniquephrasexyz&size=20",
+                    HttpMethod.GET,
+                    new HttpEntity<>(bearer(alice.token())),
+                    new ParameterizedTypeReference<PageResponse<MessageResponse>>() {
+                    }
+            );
+            assertThat(found.getStatusCode()).isEqualTo(HttpStatus.OK);
+            assertThat(found.getBody()).isNotNull();
+            assertThat(found.getBody().content()).extracting(MessageResponse::content)
+                    .anyMatch(content -> content != null && content.contains("uniquephrasexyz"));
+        } finally {
+            session.close();
+        }
+    }
+
+    @Test
+    void duplicateReactionStaysUnique() throws Exception {
+        AuthResponse alice = register("react_alice", "react.alice@example.com");
+        RoomResponse room = createRoom(alice.token(), "Reaction Arena");
+        CollectingHandler handler = new CollectingHandler();
+        WebSocketSession session = connect(alice.token(), handler);
+        try {
+            waitForType(handler, "CONNECTED");
+            session.sendMessage(joinPayload(room.id(), "req-join-a"));
+            waitForType(handler, "JOINED");
+            session.sendMessage(sendPayload(room.id(), "req-1", "react to me"));
+            JsonNode message = waitForType(handler, "MESSAGE");
+            String messageId = message.path("messageId").asText();
+            session.sendMessage(new TextMessage(objectMapper.writeValueAsString(Map.of(
+                    "type", "ADD_REACTION",
+                    "requestId", "req-re-1",
+                    "roomId", room.id().toString(),
+                    "messageId", messageId,
+                    "emoji", "👍"
+            ))));
+            waitForType(handler, "REACTION");
+            session.sendMessage(new TextMessage(objectMapper.writeValueAsString(Map.of(
+                    "type", "ADD_REACTION",
+                    "requestId", "req-re-2",
+                    "roomId", room.id().toString(),
+                    "messageId", messageId,
+                    "emoji", "👍"
+            ))));
+            waitForType(handler, "REACTION");
+            ResponseEntity<PageResponse<MessageResponse>> history = history(alice.token(), room.id());
+            assertThat(history.getStatusCode()).isEqualTo(HttpStatus.OK);
+            assertThat(history.getBody()).isNotNull();
+            assertThat(history.getBody().content()).isNotEmpty();
+            assertThat(history.getBody().content().getFirst().reactions()).hasSize(1);
+            assertThat(history.getBody().content().getFirst().reactions().getFirst().count()).isEqualTo(1);
+        } finally {
+            session.close();
+        }
+    }
+
+    @Test
+    void mutedMemberCannotAttach() {
+        AuthResponse alice = register("att_alice", "att.alice@example.com");
+        AuthResponse bob = register("att_bob", "att.bob@example.com");
+        RoomResponse room = createRoom(alice.token(), "Attach Arena");
+        joinRoom(bob.token(), room.id());
+        ResponseEntity<Void> muted = exchange(
+                alice.token(),
+                HttpMethod.POST,
+                "/api/rooms/" + room.id() + "/members/" + bob.userId() + "/mute",
+                null,
+                Void.class
+        );
+        assertThat(muted.getStatusCode()).isEqualTo(HttpStatus.NO_CONTENT);
+        HttpHeaders headers = new HttpHeaders();
+        headers.setBearerAuth(bob.token());
+        headers.setContentType(MediaType.MULTIPART_FORM_DATA);
+        ByteArrayResource file = new ByteArrayResource(PNG_BYTES) {
+            @Override
+            public String getFilename() {
+                return "x.png";
+            }
+        };
+        MultiValueMap<String, Object> body = new LinkedMultiValueMap<>();
+        HttpHeaders fileHeaders = new HttpHeaders();
+        fileHeaders.setContentType(MediaType.IMAGE_PNG);
+        body.add("file", new HttpEntity<>(file, fileHeaders));
+        ResponseEntity<String> uploaded = rest.exchange(
+                "/api/rooms/" + room.id() + "/attachments",
+                HttpMethod.POST,
+                new HttpEntity<>(body, headers),
+                String.class
+        );
+        assertThat(uploaded.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
+    }
+
+    private static final byte[] PNG_BYTES = new byte[] {
+            (byte) 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D,
+            0x49, 0x48, 0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x02,
+            0x00, 0x00, 0x00, (byte) 0x90, 0x77, 0x53, (byte) 0xDE, 0x00, 0x00, 0x00, 0x0C, 0x49,
+            0x44, 0x41, 0x54, 0x08, (byte) 0xD7, 0x63, (byte) 0xF8, (byte) 0xCF, (byte) 0xC0, 0x00,
+            0x00, 0x00, 0x03, 0x00, 0x01, 0x18, (byte) 0xDD, (byte) 0x8D, (byte) 0xB4, 0x00, 0x00,
+            0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, (byte) 0xAE, 0x42, 0x60, (byte) 0x82
+    };
 
     private AuthResponse register(String username, String email) {
         ResponseEntity<AuthResponse> response = rest.postForEntity(

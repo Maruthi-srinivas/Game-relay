@@ -48,7 +48,7 @@ public class ChatEventListener implements MessageListener {
         }
         try {
             switch (event.kind()) {
-                case MESSAGE, PRESENCE, TYPING, USER_JOINED, USER_LEFT, MESSAGE_DELETED, MESSAGE_EDITED -> localFrameSender.sendToRoom(
+                case MESSAGE, PRESENCE, TYPING, USER_JOINED, USER_LEFT, MESSAGE_DELETED, MESSAGE_EDITED, REACTION, DELIVERY, READ -> localFrameSender.sendToRoom(
                         event.roomId(),
                         objectMapper.writeValueAsString(event.body()),
                         event.excludeSessionId()

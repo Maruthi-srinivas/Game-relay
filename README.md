@@ -31,7 +31,7 @@ Load test (optional):
 docker compose --profile loadtest run --rm k6
 ```
 
-Grafana is at [http://localhost:3000](http://localhost:3000) (anonymous viewer, or admin/admin). Prometheus is at [http://localhost:9090](http://localhost:9090).
+Grafana is at [http://localhost:3000](http://localhost:3000) (anonymous viewer, or admin/admin). Prometheus is bound to [http://127.0.0.1:9090](http://127.0.0.1:9090) only.
 
 ## Environment variables
 
@@ -46,6 +46,10 @@ Copy [`.env.example`](.env.example):
 | `JWT_ACCESS_EXPIRATION` | `900000` | Access token lifetime in milliseconds (15 minutes) |
 | `JWT_REFRESH_EXPIRATION` | `604800000` | Refresh cookie lifetime (7 days) |
 | `JWT_REFRESH_COOKIE_SECURE` | `true` | Set `Secure` on the refresh cookie (HTTPS) |
+| `PROM_USER` | `prom` | HTTP Basic user for `/actuator/prometheus` |
+| `PROM_PASSWORD` | `prompass` | HTTP Basic password for Prometheus scrapes |
+| `MINIO_ROOT_USER` | `minio` | MinIO root user (internal object store) |
+| `MINIO_ROOT_PASSWORD` | `minio12345` | MinIO root password |
 
 Do not commit `.env` or production secrets.
 
@@ -74,8 +78,8 @@ backend/                 Spring Boot 3 / Java 21 application
 frontend/                 React + Vite SPA (built in Docker, served by nginx with TLS)
 gateway/                  nginx TLS terminator + load balancer for chat-a and chat-b
 certs/                    generate.sh (local CA); server certs written at compose start
-observability/            Prometheus, Grafana dashboard, k6 script
-docker-compose.yml        frontend + gateway + chat-a + chat-b + postgres + redis + kafka + metrics
+observability/            Prometheus, Grafana, Loki, Promtail, k6
+docker-compose.yml        frontend + gateway + chat-a + chat-b + postgres + redis + kafka + minio + audit-consumer + metrics + logs
 ```
 
 ## Tests
@@ -90,12 +94,22 @@ On Linux/macOS replace `%cd%` with `$(pwd)`.
 
 ## V6 definition of done
 
-- `docker compose up --build` starts postgres, redis, kafka, chat-a, chat-b, gateway, frontend, prometheus, grafana
-- UI at `https://localhost:8081`; API/WS at `https://localhost:8080`
-- Access JWT is short-lived; refresh cookie rotates; logout revokes
-- WebSocket AUTH is the first frame (no `?token=`)
-- Room types have rules: global auto-join, private unique DMs, party/team invites, game rooms join-by-id
-- Presence includes ONLINE / AWAY / IN_GAME / OFFLINE and last-seen
-- Mute/kick/report, soft delete, send rate limits
-- Live frames still go through Redis; Kafka receives persisted events
-- k6 profile can hit HTTPS register / WS AUTH / send
+V6 remains the baseline: two chat nodes, Redis live fan-out, Kafka post-commit log, short-lived JWTs, room types, presence, mute/kick/report.
+
+## V7 definition of done
+
+- Ban/unban and promote/demote; banned users cannot rejoin; auto-join skips bans
+- `MARK_READ` / unread badges (`unreadCount`); idempotent `SEND_MESSAGE` via `requestId`
+- Idle presence sweeper sets `AWAY`
+- In-room FTS search (`GET /api/rooms/{id}/messages/search?q=`)
+- `ADD_REACTION` / `REMOVE_REACTION` with unique (message, user, emoji)
+- MinIO (or local disk in tests) attachments; JWT download; muted members cannot attach
+- UI: member actions, report inbox, unread, ticks, search, reactions, composer attach
+
+## V8 definition of done
+
+- Loki + Promtail collect logs from chat-a, chat-b, gateway, frontend, audit-consumer
+- Grafana Game Chat dashboard includes a Loki logs row
+- Dedicated `audit-consumer` (`SPRING_PROFILES_ACTIVE=audit`, group `gamechat-audit`); chat nodes set `KAFKA_LOG_LISTENER=false`
+- Prometheus scrapes `/actuator/prometheus` with basic auth and is bound to `127.0.0.1:9090`
+- k6 two-user load script under `docker compose --profile loadtest run --rm k6`

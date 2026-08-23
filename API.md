@@ -1,4 +1,4 @@
-# Game Chat Room Service — API Guide (V6)
+# Game Chat Room Service — API Guide (V7/V8)
 
 Base URL: `https://localhost:8080` (TLS nginx gateway in front of `chat-a` and `chat-b`). The UI is `https://localhost:8081`.
 
@@ -452,6 +452,35 @@ curl.exe -s "https://localhost:8080/api/rooms/$ROOM/messages?afterSequence=0&siz
   -H "Authorization: Bearer $TOKEN"
 ```
 
+### GET `/api/rooms/{roomId}/messages/search?q=`
+
+**Members only.** Postgres full-text search over message content (`simple` config).
+
+| Param | Default | Notes |
+|---|---|---|
+| `q` | required | Search query |
+| `size` | `20` | Clamped to 1–50 |
+
+**Response `200 OK`** — same page envelope as history.
+
+### POST `/api/rooms/{roomId}/attachments`
+
+**Members only.** Multipart field `file` (optional `caption`). Images (`png`/`jpeg`/`webp`/`gif`) or `pdf`, max 5MB. Creates a message whose `attachments` array is populated. Muted members receive `403`. MinIO is internal; the browser downloads through `GET /api/attachments/{id}` with a Bearer token.
+
+**Response `200 OK`** — a `MessageResponse`.
+
+### GET `/api/attachments/{id}`
+
+**Members of the attachment's room.** Streams bytes (`Content-Disposition: inline`).
+
+---
+
+## Moderation extras (V7)
+
+Owner can `POST /api/rooms/{roomId}/members/{userId}/promote` (`MODERATOR`) and `/demote`. Moderators can `/ban` and `/unban`. Banned users cannot `join`. `GET /api/rooms/{roomId}/reports` lists reports; `POST /api/rooms/{roomId}/reports/{reportId}/resolve` marks one resolved.
+
+Room list objects include `unreadCount`.
+
 ---
 
 ## WebSocket chat
@@ -647,7 +676,7 @@ Idle sockets with no inbound frames for `app.chat.heartbeat-timeout-ms` (default
 }
 ```
 
-**SEND_MESSAGE** — persist, `ACK` the sender, then broadcast `MESSAGE`. Max content length 2000 after trim.
+**SEND_MESSAGE** — persist, `ACK` the sender, then broadcast `MESSAGE`. Max content length 2000 after trim. Repeat the same `requestId` from the same sender in the same room to retry safely (one row).
 
 ```json
 {
@@ -655,6 +684,30 @@ Idle sockets with no inbound frames for `app.chat.heartbeat-timeout-ms` (default
   "requestId": "req-3",
   "roomId": "b81c9d10-2222-4aaa-8f00-aaaaaaaaaaaa",
   "content": "Enemy approaching"
+}
+```
+
+**ADD_REACTION** / **REMOVE_REACTION**
+
+```json
+{
+  "type": "ADD_REACTION",
+  "requestId": "req-re",
+  "roomId": "b81c9d10-2222-4aaa-8f00-aaaaaaaaaaaa",
+  "messageId": "9d0e1f20-aaaa-bbbb-cccc-ddddeeeeffff",
+  "emoji": "👍"
+}
+```
+
+Server broadcasts `REACTION` with `action` `ADD` or `REMOVE`. The pair `(messageId, userId, emoji)` is unique.
+
+**MARK_READ** — persist the caller's read cursor and fan out `READ`.
+
+```json
+{
+  "type": "MARK_READ",
+  "roomId": "b81c9d10-2222-4aaa-8f00-aaaaaaaaaaaa",
+  "sequenceNumber": 12
 }
 ```
 
@@ -755,4 +808,13 @@ Live `MESSAGE`, `PRESENCE`, and `TYPING` frames go through Redis Pub/Sub. Persis
 | GET | `/api/rooms/{roomId}/members` | Bearer, member | `200` member array |
 | GET | `/api/rooms/{roomId}/messages` | Bearer, member | `200` paged messages |
 | GET | `/api/users/{userId}/presence` | Bearer | `200` `{ userId, status, lastSeenAt }` |
-| WS | `/ws/chat` | first frame `AUTH` | `CONNECTED`, `HISTORY_SYNC`, `JOINED`, `ACK`, `MESSAGE`, presence, typing, delete/edit |
+| POST | `/api/rooms/{roomId}/members/{userId}/ban` | Bearer, owner/mod | `204` |
+| POST | `/api/rooms/{roomId}/members/{userId}/unban` | Bearer, owner/mod | `204` |
+| POST | `/api/rooms/{roomId}/members/{userId}/promote` | Bearer, owner | `204` |
+| POST | `/api/rooms/{roomId}/members/{userId}/demote` | Bearer, owner | `204` |
+| GET | `/api/rooms/{roomId}/reports` | Bearer, owner/mod | `200` report array |
+| POST | `/api/rooms/{roomId}/reports/{reportId}/resolve` | Bearer, owner/mod | `200` report |
+| GET | `/api/rooms/{roomId}/messages/search` | Bearer, member | `200` paged hits |
+| POST | `/api/rooms/{roomId}/attachments` | Bearer, member | `200` message with attachments |
+| GET | `/api/attachments/{id}` | Bearer, member | `200` file stream |
+| WS | `/ws/chat` | first frame `AUTH` | `CONNECTED`, `HISTORY_SYNC`, `JOINED`, `ACK`, `MESSAGE`, `REACTION`, `READ`, presence, typing, delete/edit |

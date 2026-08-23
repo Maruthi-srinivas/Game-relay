@@ -40,6 +40,16 @@ public class Report {
     @Column(nullable = false, length = 500)
     private String reason;
 
+    @Column(nullable = false, length = 16)
+    private String status = "OPEN";
+
+    @Column(name = "resolved_at")
+    private Instant resolvedAt;
+
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "resolver_id")
+    private User resolver;
+
     @Column(name = "created_at", nullable = false)
     private Instant createdAt;
 
@@ -55,6 +65,50 @@ public class Report {
 
     public UUID getId() {
         return id;
+    }
+
+    public Room getRoom() {
+        return room;
+    }
+
+    public User getReporter() {
+        return reporter;
+    }
+
+    public User getTargetUser() {
+        return targetUser;
+    }
+
+    public Message getMessage() {
+        return message;
+    }
+
+    public String getReason() {
+        return reason;
+    }
+
+    public String getStatus() {
+        return status;
+    }
+
+    public void setStatus(String status) {
+        this.status = status;
+    }
+
+    public Instant getResolvedAt() {
+        return resolvedAt;
+    }
+
+    public void setResolvedAt(Instant resolvedAt) {
+        this.resolvedAt = resolvedAt;
+    }
+
+    public void setResolver(User resolver) {
+        this.resolver = resolver;
+    }
+
+    public Instant getCreatedAt() {
+        return createdAt;
     }
 
     public void setRoom(Room room) {

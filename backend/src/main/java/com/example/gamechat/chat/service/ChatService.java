@@ -2,6 +2,7 @@ package com.example.gamechat.chat.service;
 
 import com.example.gamechat.chat.dto.SyncBatch;
 import com.example.gamechat.chat.entity.Message;
+import com.example.gamechat.chat.entity.MessageReaction;
 import com.example.gamechat.common.exception.ApiException;
 import com.example.gamechat.kafka.ChatEventLog;
 import com.example.gamechat.room.service.RoomService;
@@ -35,15 +36,35 @@ public class ChatService {
 
     @Transactional
     public Message sendMessage(UUID userId, UUID roomId, String content) {
+        return sendMessage(userId, roomId, content, null);
+    }
+
+    @Transactional
+    public Message sendMessage(UUID userId, UUID roomId, String content, String requestId) {
         roomService.requireMember(roomId, userId);
         if (roomService.isMuted(roomId, userId)) {
             throw ApiException.forbidden("You are muted in this room");
         }
         rateLimitService.checkSend(userId);
-        Message saved = messageService.save(roomId, userId, content);
+        Message saved = messageService.save(roomId, userId, content, requestId, false);
         chatEventLog.messagePersisted(saved);
         chatMetrics.recordMessageSent();
         return saved;
+    }
+
+    @Transactional
+    public MessageReaction addReaction(UUID userId, UUID roomId, UUID messageId, String emoji) {
+        return messageService.addReaction(roomId, userId, messageId, emoji);
+    }
+
+    @Transactional
+    public void removeReaction(UUID userId, UUID roomId, UUID messageId, String emoji) {
+        messageService.removeReaction(roomId, userId, messageId, emoji);
+    }
+
+    @Transactional
+    public void markRead(UUID userId, UUID roomId, long sequence) {
+        roomService.markRead(roomId, userId, sequence);
     }
 
     public void requireMember(UUID roomId, UUID userId) {

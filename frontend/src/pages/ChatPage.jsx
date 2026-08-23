@@ -8,6 +8,7 @@ import JoinRoom from "../components/JoinRoom.jsx";
 import MessageList from "../components/MessageList.jsx";
 import Composer from "../components/Composer.jsx";
 import MemberList from "../components/MemberList.jsx";
+import ReportInbox from "../components/ReportInbox.jsx";
 import { roomTypeLabel } from "../components/roomTypes.js";
 
 export default function ChatPage() {
@@ -16,6 +17,8 @@ export default function ChatPage() {
   const chat = useChat();
   const [createOpen, setCreateOpen] = useState(false);
   const [joinOpen, setJoinOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const [hits, setHits] = useState([]);
 
   useEffect(() => {
     chat.selectRoom(roomId || null);
@@ -56,6 +59,16 @@ export default function ChatPage() {
     } catch {
       window.prompt("Invite", chat.room.id);
     }
+  }
+
+  async function onSearch(e) {
+    e.preventDefault();
+    if (!query.trim()) {
+      setHits([]);
+      return;
+    }
+    const rows = await chat.searchChat(query);
+    setHits(Array.isArray(rows) ? rows : []);
   }
 
   return (
@@ -99,6 +112,22 @@ export default function ChatPage() {
                       <span>{chat.onlineUserIds.size} online</span>
                       <span>cap {chat.room.maxMembers}</span>
                     </div>
+                    <form className="search-form" onSubmit={onSearch}>
+                      <input
+                        value={query}
+                        onChange={(e) => setQuery(e.target.value)}
+                        placeholder="Search messages"
+                      />
+                    </form>
+                    {hits.length ? (
+                      <div className="search-hits">
+                        {hits.map((item) => (
+                          <div key={item.messageId} className="search-hit">
+                            {item.content}
+                          </div>
+                        ))}
+                      </div>
+                    ) : null}
                   </div>
                     <div className="chat-head-actions">
                     {chat.room.type !== "GLOBAL" && chat.room.type !== "PRIVATE" ? (
@@ -131,6 +160,7 @@ export default function ChatPage() {
         {roomId ? (
           <aside className="members-col">
             <MemberList />
+            <ReportInbox />
           </aside>
         ) : null}
       </div>

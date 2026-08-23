@@ -6,11 +6,12 @@ const MAX_LEN = 2000;
 const TYPING_THROTTLE_MS = 400;
 
 export default function Composer({ disabled }) {
-  const { sendChat, sendTyping, room } = useChat();
+  const { sendChat, sendTyping, attachFile, room } = useChat();
   const [text, setText] = useState("");
   const typingSentRef = useRef(false);
   const lastSentRef = useRef(0);
   const idleTimerRef = useRef(null);
+  const fileRef = useRef(null);
   const slug = roomSlug(room?.name);
 
   function stopTyping() {
@@ -59,10 +60,25 @@ export default function Composer({ disabled }) {
     stopTyping();
   }
 
+  async function onFile(e) {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file || disabled) {
+      return;
+    }
+    await attachFile(file, text.trim() || undefined);
+    setText("");
+    stopTyping();
+  }
+
   const nearCap = text.length > MAX_LEN - 200;
 
   return (
     <form className="composer" onSubmit={onSubmit}>
+      <input ref={fileRef} type="file" hidden accept="image/png,image/jpeg,image/webp,image/gif,application/pdf" onChange={onFile} />
+      <button type="button" className="ghost attach" disabled={disabled} onClick={() => fileRef.current?.click()} title="Attach">
+        +
+      </button>
       <div className="composer-wrap">
         <input
           value={text}

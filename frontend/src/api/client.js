@@ -107,3 +107,67 @@ export async function request(token, method, path, body, options = {}) {
 
   return payload;
 }
+
+export async function upload(token, path, formData, options = {}) {
+  const headers = { Accept: "application/json" };
+  if (token) {
+    headers.Authorization = `Bearer ${token}`;
+  }
+  const started = Date.now();
+  let res;
+  try {
+    res = await fetch(path, { method: "POST", headers, body: formData });
+  } catch (err) {
+    logTraffic({
+      kind: "rest",
+      method: "POST",
+      path,
+      request: "[multipart]",
+      response: err.message || "Network error",
+      status: 0,
+      ok: false,
+      ms: Date.now() - started,
+    });
+    throw new ApiError(0, "NETWORK_ERROR", err.message || "Network error");
+  }
+  if (res.status === 401 && !options.skipRefresh && refreshHandler && !path.startsWith("/api/auth/")) {
+    try {
+      if (!refreshing) {
+        refreshing = refreshHandler();
+      }
+      const nextToken = await refreshing;
+      refreshing = null;
+      if (nextToken) {
+        return upload(nextToken, path, formData, { ...options, skipRefresh: true });
+      }
+    } catch {
+      refreshing = null;
+    }
+  }
+  const text = await res.text();
+  let payload = null;
+  if (text) {
+    try {
+      payload = JSON.parse(text);
+    } catch {
+      payload = text;
+    }
+  }
+  logTraffic({
+    kind: "rest",
+    method: "POST",
+    path,
+    request: "[multipart]",
+    response: redactForLog(payload),
+    status: res.status,
+    ok: res.ok,
+    ms: Date.now() - started,
+  });
+  if (res.status === 401) {
+    unauthorizedHandler?.();
+  }
+  if (!res.ok) {
+    throw new ApiError(res.status, payload?.code || "ERROR", payload?.message || res.statusText || "Request failed", payload);
+  }
+  return payload;
+}

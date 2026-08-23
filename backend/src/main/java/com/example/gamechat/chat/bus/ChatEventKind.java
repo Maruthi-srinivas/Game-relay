@@ -8,5 +8,8 @@ public enum ChatEventKind {
     USER_JOINED,
     USER_LEFT,
     MESSAGE_DELETED,
-    MESSAGE_EDITED
+    MESSAGE_EDITED,
+    REACTION,
+    DELIVERY,
+    READ
 }
