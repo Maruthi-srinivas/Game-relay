@@ -1,5 +1,6 @@
 server:
   port: 8080
+  forward-headers-strategy: framework
 
 spring:
   application:
@@ -24,21 +25,39 @@ spring:
       port: ${REDIS_PORT:6379}
       repositories:
         enabled: false
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+    listener:
+      auto-startup: ${KAFKA_ENABLED:false}
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.apache.kafka.common.serialization.StringSerializer
+    consumer:
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      auto-offset-reset: latest
+      group-id: gamechat-log
 
 management:
   endpoints:
     web:
       exposure:
-        include: health,info
+        include: health,info,prometheus
   endpoint:
     health:
       show-details: never
+    prometheus:
+      enabled: true
 
 jwt:
   secret: ${JWT_SECRET:change-me-to-a-long-random-secret-at-least-32-chars}
-  expiration-ms: ${JWT_EXPIRATION:86400000}
+  expiration-ms: ${JWT_ACCESS_EXPIRATION:900000}
+  refresh-expiration-ms: ${JWT_REFRESH_EXPIRATION:604800000}
+  refresh-cookie-secure: ${JWT_REFRESH_COOKIE_SECURE:true}
 
 app:
+  kafka:
+    enabled: ${KAFKA_ENABLED:false}
   chat:
     max-message-length: 2000
     sync-batch-size: 100
@@ -47,3 +66,7 @@ app:
     typing-idle-ms: 3000
     presence-ttl-ms: 90000
     presence-sweep-ms: 15000
+    send-rate-limit: 20
+    send-rate-window-seconds: 10
+    auth-rate-limit: 30
+    auth-rate-window-seconds: 60

@@ -34,6 +34,7 @@ public class JwtService {
         Instant now = Instant.now();
         Instant expiry = now.plusMillis(expirationMs);
         return Jwts.builder()
+                .id(UUID.randomUUID().toString())
                 .subject(userId.toString())
                 .claim("username", username)
                 .issuedAt(Date.from(now))
@@ -43,17 +44,26 @@ public class JwtService {
     }
 
     public UserPrincipal parse(String token) {
-        Claims claims = Jwts.parser()
-                .verifyWith(key)
-                .build()
-                .parseSignedClaims(token)
-                .getPayload();
+        Claims claims = parseClaims(token);
         UUID userId = UUID.fromString(claims.getSubject());
         String username = claims.get("username", String.class);
-        return new UserPrincipal(userId, username);
+        return new UserPrincipal(userId, username, claims.getId());
+    }
+
+    public Instant expiration(String token) {
+        Date exp = parseClaims(token).getExpiration();
+        return exp == null ? Instant.now() : exp.toInstant();
     }
 
     public long getExpirationMs() {
         return expirationMs;
+    }
+
+    private Claims parseClaims(String token) {
+        return Jwts.parser()
+                .verifyWith(key)
+                .build()
+                .parseSignedClaims(token)
+                .getPayload();
     }
 }

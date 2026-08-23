@@ -337,6 +337,12 @@ label.field {
   color: var(--muted);
   font-size: 11px;
 }
+.presence-picker select {
+  margin-top: 4px;
+  padding: 2px 6px;
+  font-size: 11px;
+  width: 100%;
+}
 .status-dot {
   width: 8px;
   height: 8px;
@@ -477,13 +483,18 @@ label.field {
 .member-list { display: flex; flex-direction: column; gap: 2px; }
 .member-item {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 8px;
   padding: 6px 6px;
   border-radius: 6px;
+  flex-wrap: wrap;
 }
 .member-item:hover { background: #1c2030; }
-.member-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; font-weight: 500; }
+.member-meta { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.member-name { overflow: hidden; text-overflow: ellipsis; font-weight: 500; }
+.member-sub { color: var(--muted); font-size: 11px; }
+.member-actions { display: flex; gap: 4px; width: 100%; flex-wrap: wrap; }
+button.tiny { padding: 2px 6px; font-size: 10px; }
 .member-role {
   font-size: 10px;
   letter-spacing: 0.08em;

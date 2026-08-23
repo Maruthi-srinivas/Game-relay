@@ -1,9 +1,15 @@
 import { logTraffic, redactForLog } from "./trafficLog.js";
 
 let unauthorizedHandler = null;
+let refreshHandler = null;
+let refreshing = null;
 
 export function setUnauthorizedHandler(fn) {
   unauthorizedHandler = fn;
+}
+
+export function setRefreshHandler(fn) {
+  refreshHandler = fn;
 }
 
 export class ApiError extends Error {
@@ -16,7 +22,7 @@ export class ApiError extends Error {
   }
 }
 
-export async function request(token, method, path, body) {
+export async function request(token, method, path, body, options = {}) {
   const headers = { Accept: "application/json" };
   if (body !== undefined && body !== null) {
     headers["Content-Type"] = "application/json";
@@ -26,6 +32,9 @@ export async function request(token, method, path, body) {
   }
 
   const init = { method, headers };
+  if (options.credentials) {
+    init.credentials = "include";
+  }
   if (body !== undefined && body !== null) {
     init.body = JSON.stringify(body);
   }
@@ -48,6 +57,21 @@ export async function request(token, method, path, body) {
       ms: Date.now() - started,
     });
     throw new ApiError(0, "NETWORK_ERROR", err.message || "Network error");
+  }
+
+  if (res.status === 401 && !options.skipRefresh && refreshHandler && !path.startsWith("/api/auth/")) {
+    try {
+      if (!refreshing) {
+        refreshing = refreshHandler();
+      }
+      const nextToken = await refreshing;
+      refreshing = null;
+      if (nextToken) {
+        return request(nextToken, method, path, body, { ...options, skipRefresh: true });
+      }
+    } catch {
+      refreshing = null;
+    }
   }
 
   const text = await res.text();

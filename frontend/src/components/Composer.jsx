@@ -68,7 +68,7 @@ export default function Composer({ disabled }) {
           value={text}
           onChange={onChange}
           maxLength={MAX_LEN}
-          placeholder={disabled ? "Connecting…" : `Message #${slug}`}
+          placeholder={disabled ? (room ? "Muted or connecting…" : "Connecting…") : `Message #${slug}`}
           disabled={disabled}
           autoComplete="off"
         />

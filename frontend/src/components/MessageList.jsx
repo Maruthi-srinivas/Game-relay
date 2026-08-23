@@ -14,7 +14,7 @@ function formatTime(ts) {
 }
 
 export default function MessageList() {
-  const { messages, namesByUserId, userId, hasMoreHistory, loadingHistory, loadOlderHistory, typingByUser } =
+  const { messages, namesByUserId, userId, hasMoreHistory, loadingHistory, loadOlderHistory, typingByUser, deleteChat } =
     useChat();
   const scrollerRef = useRef(null);
   const stickToBottomRef = useRef(true);
@@ -62,7 +62,12 @@ export default function MessageList() {
                 <span className="from">{name}</span>
                 <span className="time">{msg.pending ? "sending…" : formatTime(msg.timestamp)}</span>
               </div>
-              <div className="body">{msg.content}</div>
+              <div className="body">{msg.deleted ? <em className="muted">Message deleted</em> : msg.content}{msg.edited && !msg.deleted ? <span className="muted"> (edited)</span> : null}</div>
+              {mine && !msg.deleted && msg.messageId ? (
+                <button type="button" className="ghost tiny" onClick={() => deleteChat(msg.messageId)}>
+                  Delete
+                </button>
+              ) : null}
             </div>
           </div>
         );

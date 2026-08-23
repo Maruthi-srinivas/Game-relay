@@ -34,6 +34,9 @@ public class Message {
     @Column(name = "deleted_at")
     private Instant deletedAt;
 
+    @Column(name = "edited_at")
+    private Instant editedAt;
+
     @PrePersist
     void prePersist() {
         if (id == null) {
@@ -88,7 +91,23 @@ public class Message {
         return createdAt;
     }
 
+    public void setCreatedAt(Instant createdAt) {
+        this.createdAt = createdAt;
+    }
+
     public Instant getDeletedAt() {
         return deletedAt;
+    }
+
+    public void setDeletedAt(Instant deletedAt) {
+        this.deletedAt = deletedAt;
+    }
+
+    public Instant getEditedAt() {
+        return editedAt;
+    }
+
+    public void setEditedAt(Instant editedAt) {
+        this.editedAt = editedAt;
     }
 }

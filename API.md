@@ -1,6 +1,8 @@
-# Game Chat Room Service — API Guide (V3)
+# Game Chat Room Service — API Guide (V6)
 
-Base URL: `http://localhost:8080` (nginx gateway in front of `chat-a` and `chat-b`)
+Base URL: `https://localhost:8080` (TLS nginx gateway in front of `chat-a` and `chat-b`). The UI is `https://localhost:8081`.
+
+Use `-k` with curl until you trust `certs/ca.crt`.
 
 Start the stack first:
 
@@ -12,7 +14,7 @@ docker compose up --build
 Wait until the service is up, then:
 
 ```powershell
-curl.exe http://localhost:8080/actuator/health
+curl.exe -k https://localhost:8080/actuator/health
 ```
 
 Expected:
@@ -25,9 +27,7 @@ Expected:
 
 ## Authentication
 
-There is no shared/static API key. You get a **JWT** from register or login. That JWT is the Bearer token.
-
-Use it on every REST call except register, login, and health:
+There is no shared/static API key. Register or login returns a short-lived **access token** plus an HttpOnly **refresh cookie**.
 
 ```http
 Authorization: Bearer eyJhbGciOiJIUzI1NiJ9....
@@ -35,16 +35,13 @@ Authorization: Bearer eyJhbGciOiJIUzI1NiJ9....
 
 Rules:
 
-- Copy the `token` field from the register/login response.
+- Copy `accessToken` from the register/login JSON.
 - Put a space after `Bearer`.
-- Do not wrap the token in quotes.
-- Do not send `userId` as the token.
-- Default lifetime is 24 hours (`JWT_EXPIRATION=86400000`). Call login again when it expires.
-- Each user has their own token. Alice cannot act as Bob.
+- Default access lifetime is 15 minutes (`JWT_ACCESS_EXPIRATION=900000`). Call `POST /api/auth/refresh` (cookie) before it expires.
+- `POST /api/auth/logout` revokes the refresh family and denylists the access `jti`.
+- WebSocket must send `{ "type": "AUTH", "token": "<accessToken>" }` as the first frame. Query `?token=` is not used.
 
-In Postman: Authorization → Bearer Token → paste the `token` value only.
-
-WebSocket can use the same JWT as `?token=<jwt>` or as an `Authorization: Bearer` header on the handshake.
+In Postman: Authorization → Bearer Token → paste `accessToken` only. For refresh, enable cookies.
 
 ---
 
@@ -83,7 +80,7 @@ No auth.
 ```
 
 ```powershell
-curl.exe http://localhost:8080/actuator/health
+curl.exe -k -s https://localhost:8080/actuator/health
 ```
 
 ---
@@ -116,13 +113,14 @@ No auth. Creates a user and returns a JWT.
 
 ```json
 {
-  "token": "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiI3YzE5Zj...signature",
+  "accessToken": "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiI3YzE5Zj...signature",
+  "expiresIn": 900000,
   "userId": "7c19f8a2-4d3e-4b1a-9c22-1a2b3c4d5e6f",
   "username": "alice"
 }
 ```
 
-Save `token`. That is your Bearer token.
+Save `accessToken`. A `refresh_token` cookie is also set (`HttpOnly`, `Secure`, `SameSite=Lax`, `Path=/api/auth`).
 
 **Errors**
 
@@ -130,7 +128,7 @@ Save `token`. That is your Bearer token.
 - `409 CONFLICT` — `"Username already taken"` or `"Email already registered"`
 
 ```powershell
-curl.exe -s -X POST http://localhost:8080/api/auth/register `
+curl.exe -s -X POST https://localhost:8080/api/auth/register `
   -H "Content-Type: application/json" `
   -d "{\"username\":\"alice\",\"email\":\"alice@example.com\",\"password\":\"password123\"}"
 ```
@@ -156,7 +154,8 @@ Login is by **username**, not email.
 
 ```json
 {
-  "token": "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiI3YzE5Zj...signature",
+  "accessToken": "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiI3YzE5Zj...signature",
+  "expiresIn": 900000,
   "userId": "7c19f8a2-4d3e-4b1a-9c22-1a2b3c4d5e6f",
   "username": "alice"
 }
@@ -169,7 +168,7 @@ Login is by **username**, not email.
 - `403 FORBIDDEN` — `"Account is not active"`
 
 ```powershell
-curl.exe -s -X POST http://localhost:8080/api/auth/login `
+curl.exe -s -X POST https://localhost:8080/api/auth/login `
   -H "Content-Type: application/json" `
   -d "{\"username\":\"alice\",\"password\":\"password123\"}"
 ```
@@ -177,8 +176,16 @@ curl.exe -s -X POST http://localhost:8080/api/auth/login `
 Set the token in PowerShell:
 
 ```powershell
-$TOKEN = "paste-jwt-from-register-or-login"
+$TOKEN = "paste-accessToken-from-register-or-login"
 ```
+
+### POST `/api/auth/refresh`
+
+No Bearer required. Sends the `refresh_token` cookie, rotates it, returns a new access token.
+
+### POST `/api/auth/logout`
+
+Optional Bearer. Revokes the refresh family and denylists the access `jti`. Clears the cookie.
 
 ---
 
@@ -186,8 +193,12 @@ $TOKEN = "paste-jwt-from-register-or-login"
 
 All room endpoints require `Authorization: Bearer <token>`.
 
-Allowed `type` values: `GLOBAL`, `GAME_ROOM`, `TEAM`, `PARTY`, `PRIVATE`.  
-V1 defaults to `GAME_ROOM` if `type` is omitted. Membership rules for those types are still the same in V1 (anyone with the id can join until the room is full).
+Allowed `type` values: `GLOBAL`, `GAME_ROOM`, `TEAM`, `PARTY`, `PRIVATE`.
+
+- `GLOBAL` is seeded (`Global Lobby`) and auto-joined on register/login. You cannot create or leave it.
+- `GAME_ROOM` is join-by-id until full.
+- `PARTY` / `TEAM` require an invite code (`POST /api/rooms/{id}/invites`, then join with `{ "inviteCode": "..." }`).
+- `PRIVATE` is get-or-create via `POST /api/rooms/private` `{ "userId": "<peer>" }`. Strangers cannot join by id.
 
 ### GET `/api/rooms`
 
@@ -216,7 +227,7 @@ No query params.
 - `401` — missing/invalid token
 
 ```powershell
-curl.exe -s http://localhost:8080/api/rooms `
+curl.exe -s https://localhost:8080/api/rooms `
   -H "Authorization: Bearer $TOKEN"
 ```
 
@@ -267,7 +278,7 @@ Save `id` as the room id.
 - `400 VALIDATION_ERROR` — blank name, `maxMembers` out of range
 
 ```powershell
-curl.exe -s -X POST http://localhost:8080/api/rooms `
+curl.exe -s -X POST https://localhost:8080/api/rooms `
   -H "Authorization: Bearer $TOKEN" `
   -H "Content-Type: application/json" `
   -d "{\"name\":\"Arena\",\"type\":\"GAME_ROOM\"}"
@@ -292,7 +303,7 @@ Returns room details. **Members only.**
 - `404 NOT_FOUND` — `"Room not found"`
 
 ```powershell
-curl.exe -s http://localhost:8080/api/rooms/$ROOM `
+curl.exe -s https://localhost:8080/api/rooms/$ROOM `
   -H "Authorization: Bearer $TOKEN"
 ```
 
@@ -313,7 +324,7 @@ No request body.
 - `409 CONFLICT` — `"Room is full"`
 
 ```powershell
-curl.exe -s -X POST http://localhost:8080/api/rooms/$ROOM/join `
+curl.exe -s -X POST https://localhost:8080/api/rooms/$ROOM/join `
   -H "Authorization: Bearer $BOB"
 ```
 
@@ -336,7 +347,7 @@ Also drops that user's WebSocket sessions from the room's in-memory broadcast li
 - `404 NOT_FOUND` — `"Room not found"`
 
 ```powershell
-curl.exe -s -i -X POST http://localhost:8080/api/rooms/$ROOM/leave `
+curl.exe -s -i -X POST https://localhost:8080/api/rooms/$ROOM/leave `
   -H "Authorization: Bearer $BOB"
 ```
 
@@ -372,7 +383,7 @@ Roles: `OWNER` (creator) or `MEMBER`.
 - `401` / `403` / `404` — same as get room
 
 ```powershell
-curl.exe -s http://localhost:8080/api/rooms/$ROOM/members `
+curl.exe -s https://localhost:8080/api/rooms/$ROOM/members `
   -H "Authorization: Bearer $TOKEN"
 ```
 
@@ -434,10 +445,10 @@ Empty room:
 - `401` / `403` / `404` — same as get room
 
 ```powershell
-curl.exe -s "http://localhost:8080/api/rooms/$ROOM/messages?page=0&size=20" `
+curl.exe -s "https://localhost:8080/api/rooms/$ROOM/messages?page=0&size=20" `
   -H "Authorization: Bearer $TOKEN"
 
-curl.exe -s "http://localhost:8080/api/rooms/$ROOM/messages?afterSequence=0&size=50" `
+curl.exe -s "https://localhost:8080/api/rooms/$ROOM/messages?afterSequence=0&size=50" `
   -H "Authorization: Bearer $TOKEN"
 ```
 
@@ -447,14 +458,15 @@ curl.exe -s "http://localhost:8080/api/rooms/$ROOM/messages?afterSequence=0&size
 
 There is **no** REST endpoint to send a message. Use the socket.
 
-**URL:** `ws://localhost:8080/ws/chat`
+**URL:** `wss://localhost:8080/ws/chat`
 
-**Auth (one of):**
+Handshake does not require a token. First frame:
 
-- Query: `ws://localhost:8080/ws/chat?token=<jwt>`
-- Header: `Authorization: Bearer <jwt>`
+```json
+{ "type": "AUTH", "token": "<accessToken>" }
+```
 
-Handshake without a valid JWT is rejected (connection fails; you will not get a JSON error).
+Then `CONNECTED`. Other types before AUTH return `ERROR UNAUTHORIZED`.
 
 You must **join the room via REST first**, then `JOIN_ROOM` on the socket to receive broadcasts.
 
@@ -509,7 +521,7 @@ You must **join the room via REST first**, then `JOIN_ROOM` on the socket to rec
   "type": "PRESENCE_SNAPSHOT",
   "roomId": "b81c9d10-2222-4aaa-8f00-aaaaaaaaaaaa",
   "online": [
-    { "userId": "7c19f8a2-4d3e-4b1a-9c22-1a2b3c4d5e6f", "username": "alice" }
+    { "userId": "7c19f8a2-4d3e-4b1a-9c22-1a2b3c4d5e6f", "username": "alice", "status": "ONLINE" }
   ]
 }
 ```
@@ -524,7 +536,7 @@ You must **join the room via REST first**, then `JOIN_ROOM` on the socket to rec
 }
 ```
 
-`status` is `ONLINE` or `OFFLINE`. Offline is emitted when the user's last socket leaves the room, the socket closes, or they REST-leave.
+`status` is `ONLINE`, `AWAY`, `IN_GAME`, or `OFFLINE`. Clients send `SET_PRESENCE` with ONLINE / AWAY / IN_GAME. Offline is emitted when the user's last socket dies, they leave a room, or they are kicked. `lastSeenAt` is included when known.
 
 **After `LEAVE_ROOM`**
 
@@ -606,6 +618,12 @@ Idle sockets with no inbound frames for `app.chat.heartbeat-timeout-ms` (default
 
 ### Client → server events
 
+**AUTH** — first frame after handshake. Required within ~3 seconds.
+
+```json
+{ "type": "AUTH", "token": "<accessToken>" }
+```
+
 **JOIN_ROOM** — subscribe this socket to broadcasts and receive missed messages. Caller must already be a REST member.
 
 ```json
@@ -659,16 +677,36 @@ If this socket had not `JOIN_ROOM` yet, a successful send still subscribes it so
 }
 ```
 
+**SET_PRESENCE** — `ONLINE`, `AWAY`, or `IN_GAME`. Broadcasts `PRESENCE` to rooms this user currently occupies.
+
+```json
+{ "type": "SET_PRESENCE", "status": "AWAY" }
+```
+
+**DELETE_MESSAGE** / **EDIT_MESSAGE** — sender or moderator. Edit is allowed for 5 minutes after send. Broadcasts `MESSAGE_DELETED` / `MESSAGE_EDITED`.
+
+```json
+{ "type": "DELETE_MESSAGE", "roomId": "<room-uuid>", "messageId": "<message-uuid>" }
+```
+
+**MESSAGE_ACK** — client delivery ack after inbound `MESSAGE`. Ephemeral; not stored.
+
+```json
+{ "type": "MESSAGE_ACK", "messageId": "<message-uuid>", "roomId": "<room-uuid>" }
+```
+
 ### Example with websocat
 
 ```powershell
-websocat "ws://localhost:8080/ws/chat?token=$TOKEN"
+websocat -k "wss://localhost:8080/ws/chat"
 ```
 
-Then paste one JSON object per line:
+Then:
 
 ```json
+{"type":"AUTH","token":"<accessToken>"}
 {"type":"JOIN_ROOM","requestId":"req-1","roomId":"<room-uuid>","afterSequence":0}
+{"type":"SET_PRESENCE","status":"IN_GAME"}
 {"type":"SEND_MESSAGE","requestId":"req-2","roomId":"<room-uuid>","content":"Enemy approaching"}
 ```
 
@@ -676,7 +714,7 @@ After a successful send, `GET /api/rooms/{roomId}/messages` returns that row wit
 
 ---
 
-## Typical V3 flow
+## Typical V6 flow
 
 1. `POST /api/auth/register` as alice → save `token` and `userId`
 2. `POST /api/rooms` with alice's token → save room `id`
@@ -689,7 +727,7 @@ After a successful send, `GET /api/rooms/{roomId}/messages` returns that row wit
 9. `GET /api/rooms/{roomId}/messages` as alice or bob → history contains both messages
 10. Same history call as a third user who never joined → `403`
 
-Live `MESSAGE`, `PRESENCE`, and `TYPING` frames go through Redis Pub/Sub. Persist `ACK`, `HISTORY_SYNC`, `JOINED`, `LEFT`, `PONG`, and `ERROR` stay on the node that handled the socket. There is no Kafka.
+Live `MESSAGE`, `PRESENCE`, and `TYPING` frames go through Redis Pub/Sub. Persist `ACK`, `HISTORY_SYNC`, `JOINED`, `LEFT`, `PONG`, and `ERROR` stay on the node that handled the socket. After Postgres commit, the origin node also publishes to Kafka topics `chat.message.persisted`, `chat.user.joined`, `chat.user.left`, and `chat.moderation`.
 
 ---
 
@@ -698,13 +736,23 @@ Live `MESSAGE`, `PRESENCE`, and `TYPING` frames go through Redis Pub/Sub. Persis
 | Method | Path | Auth | Success |
 |---|---|---|---|
 | GET | `/actuator/health` | no | `200` `{ "status": "UP" }` |
-| POST | `/api/auth/register` | no | `201` `{ token, userId, username }` |
-| POST | `/api/auth/login` | no | `200` `{ token, userId, username }` |
+| POST | `/api/auth/register` | no | `201` `{ accessToken, expiresIn, userId, username }` + refresh cookie |
+| POST | `/api/auth/login` | no | `200` same as register |
+| POST | `/api/auth/refresh` | refresh cookie | `200` new access token |
+| POST | `/api/auth/logout` | cookie / optional Bearer | `204` |
 | POST | `/api/rooms` | Bearer | `201` room object |
+| POST | `/api/rooms/private` | Bearer | `201` unique DM |
+| POST | `/api/rooms/join` | Bearer | `200` join by invite code |
 | GET | `/api/rooms` | Bearer | `200` room array (memberships) |
 | GET | `/api/rooms/{roomId}` | Bearer, member | `200` room object |
-| POST | `/api/rooms/{roomId}/join` | Bearer | `200` room object |
+| POST | `/api/rooms/{roomId}/join` | Bearer | `200` room object (invite required for PARTY/TEAM) |
 | POST | `/api/rooms/{roomId}/leave` | Bearer, member | `204` empty |
+| POST | `/api/rooms/{roomId}/invites` | Bearer, owner/mod | `201` `{ code, roomId, expiresAt }` |
+| POST | `/api/rooms/{roomId}/members/{userId}/kick` | Bearer, owner/mod | `204` |
+| POST | `/api/rooms/{roomId}/members/{userId}/mute` | Bearer, owner/mod | `204` |
+| POST | `/api/rooms/{roomId}/members/{userId}/unmute` | Bearer, owner/mod | `204` |
+| POST | `/api/rooms/{roomId}/reports` | Bearer, member | `201` `{ id }` |
 | GET | `/api/rooms/{roomId}/members` | Bearer, member | `200` member array |
-| GET | `/api/rooms/{roomId}/messages` | Bearer, member | `200` paged messages (`sequenceNumber`; optional `afterSequence`) |
-| WS | `/ws/chat` | JWT query or header | `CONNECTED`, `HISTORY_SYNC`, `JOINED`, `ACK`, `MESSAGE`, presence, typing |
+| GET | `/api/rooms/{roomId}/messages` | Bearer, member | `200` paged messages |
+| GET | `/api/users/{userId}/presence` | Bearer | `200` `{ userId, status, lastSeenAt }` |
+| WS | `/ws/chat` | first frame `AUTH` | `CONNECTED`, `HISTORY_SYNC`, `JOINED`, `ACK`, `MESSAGE`, presence, typing, delete/edit |

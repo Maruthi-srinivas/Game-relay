@@ -43,14 +43,14 @@ export default function JoinRoom({ open, onClose, onJoined }) {
         aria-labelledby="join-title"
       >
         <h2 id="join-title">Join with invite</h2>
-        <p className="muted">Paste a lobby id shared by another player.</p>
+        <p className="muted">Paste a lobby UUID or invite code.</p>
         {error ? <div className="alert compact">{error}</div> : null}
         <label className="field">
           Invite
           <input
             value={roomId}
             onChange={(e) => setRoomId(e.target.value)}
-            placeholder="Lobby UUID"
+            placeholder="UUID or invite code"
             autoComplete="off"
             autoFocus
           />

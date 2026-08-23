@@ -3,10 +3,15 @@ package com.example.gamechat.auth.service;
 import com.example.gamechat.auth.dto.AuthResponse;
 import com.example.gamechat.auth.dto.LoginRequest;
 import com.example.gamechat.auth.dto.RegisterRequest;
+import com.example.gamechat.auth.entity.RefreshToken;
 import com.example.gamechat.auth.entity.User;
+import com.example.gamechat.auth.repository.RefreshTokenRepository;
 import com.example.gamechat.auth.repository.UserRepository;
 import com.example.gamechat.auth.security.JwtService;
+import com.example.gamechat.auth.security.TokenDenylist;
+import com.example.gamechat.chat.service.RateLimitService;
 import com.example.gamechat.common.exception.ApiException;
+import com.example.gamechat.room.service.RoomService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -30,15 +35,32 @@ class AuthServiceTest {
     @Mock
     private UserRepository userRepository;
     @Mock
+    private RefreshTokenRepository refreshTokenRepository;
+    @Mock
     private PasswordEncoder passwordEncoder;
     @Mock
     private JwtService jwtService;
+    @Mock
+    private TokenDenylist tokenDenylist;
+    @Mock
+    private RoomService roomService;
+    @Mock
+    private RateLimitService rateLimitService;
 
     private AuthService authService;
 
     @BeforeEach
     void setUp() {
-        authService = new AuthService(userRepository, passwordEncoder, jwtService);
+        authService = new AuthService(
+                userRepository,
+                refreshTokenRepository,
+                passwordEncoder,
+                jwtService,
+                tokenDenylist,
+                roomService,
+                rateLimitService,
+                604_800_000
+        );
     }
 
     @Test
@@ -53,22 +75,26 @@ class AuthServiceTest {
             return user;
         });
         when(jwtService.createToken(any(), any())).thenReturn("jwt-token");
+        when(jwtService.getExpirationMs()).thenReturn(900_000L);
+        when(refreshTokenRepository.save(any(RefreshToken.class))).thenAnswer(invocation -> invocation.getArgument(0));
 
-        AuthResponse response = authService.register(request);
+        AuthService.IssuedAuth issued = authService.register(request, "127.0.0.1");
 
         ArgumentCaptor<User> captor = ArgumentCaptor.forClass(User.class);
         verify(userRepository).save(captor.capture());
         assertThat(captor.getValue().getPasswordHash()).isEqualTo("hashed");
         assertThat(captor.getValue().getPasswordHash()).isNotEqualTo("password123");
-        assertThat(response.token()).isEqualTo("jwt-token");
-        assertThat(response.username()).isEqualTo("alice");
+        assertThat(issued.response().token()).isEqualTo("jwt-token");
+        assertThat(issued.response().username()).isEqualTo("alice");
+        verify(roomService).autoJoinGlobal(any());
     }
 
     @Test
     void registerRejectsDuplicateUsername() {
         when(userRepository.existsByUsernameIgnoreCase("alice")).thenReturn(true);
         assertThatThrownBy(() -> authService.register(
-                new RegisterRequest("alice", "alice@example.com", "password123")
+                new RegisterRequest("alice", "alice@example.com", "password123"),
+                "127.0.0.1"
         )).isInstanceOf(ApiException.class)
                 .extracting(ex -> ((ApiException) ex).getCode())
                 .isEqualTo("CONFLICT");
@@ -84,7 +110,7 @@ class AuthServiceTest {
         when(userRepository.findByUsernameIgnoreCase("alice")).thenReturn(Optional.of(user));
         when(passwordEncoder.matches("wrong", "hashed")).thenReturn(false);
 
-        assertThatThrownBy(() -> authService.login(new LoginRequest("alice", "wrong")))
+        assertThatThrownBy(() -> authService.login(new LoginRequest("alice", "wrong"), "127.0.0.1"))
                 .isInstanceOf(ApiException.class)
                 .extracting(ex -> ((ApiException) ex).getCode())
                 .isEqualTo("UNAUTHORIZED");

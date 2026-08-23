@@ -1,6 +1,6 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
-import { login as loginApi, register as registerApi } from "../api/auth.js";
-import { setUnauthorizedHandler } from "../api/client.js";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
+import { login as loginApi, logout as logoutApi, refresh as refreshApi, register as registerApi } from "../api/auth.js";
+import { setRefreshHandler, setUnauthorizedHandler } from "../api/client.js";
 
 const STORAGE_KEY = "gamechat.session";
 
@@ -22,11 +22,24 @@ function readSession() {
   }
 }
 
+function toSession(data) {
+  return {
+    token: data.accessToken || data.token,
+    userId: data.userId,
+    username: data.username,
+    expiresIn: data.expiresIn,
+    expiresAt: Date.now() + (data.expiresIn || 900000) - 15000,
+  };
+}
+
 export function AuthProvider({ children }) {
   const [session, setSession] = useState(readSession);
+  const sessionRef = useRef(session);
+  sessionRef.current = session;
 
   const persist = useCallback((next) => {
     setSession(next);
+    sessionRef.current = next;
     if (next) {
       sessionStorage.setItem(STORAGE_KEY, JSON.stringify(next));
     } else {
@@ -34,26 +47,59 @@ export function AuthProvider({ children }) {
     }
   }, []);
 
-  const logout = useCallback(() => {
+  const logout = useCallback(async () => {
+    const current = sessionRef.current;
+    try {
+      if (current?.token) {
+        await logoutApi(current.token);
+      }
+    } catch {
+      // still clear locally
+    }
     persist(null);
   }, [persist]);
 
+  const applyAuth = useCallback((data) => {
+    const next = toSession(data);
+    persist(next);
+    return next;
+  }, [persist]);
+
+  const silentRefresh = useCallback(async () => {
+    const data = await refreshApi();
+    const next = applyAuth(data);
+    return next.token;
+  }, [applyAuth]);
+
   useEffect(() => {
-    setUnauthorizedHandler(logout);
-    return () => setUnauthorizedHandler(null);
-  }, [logout]);
+    setUnauthorizedHandler(() => persist(null));
+    setRefreshHandler(silentRefresh);
+    return () => {
+      setUnauthorizedHandler(null);
+      setRefreshHandler(null);
+    };
+  }, [persist, silentRefresh]);
+
+  useEffect(() => {
+    if (!session?.expiresAt) {
+      return undefined;
+    }
+    const delay = Math.max(session.expiresAt - Date.now(), 1000);
+    const timer = setTimeout(() => {
+      silentRefresh().catch(() => persist(null));
+    }, delay);
+    return () => clearTimeout(timer);
+  }, [session, silentRefresh, persist]);
 
   const login = useCallback(async (username, password) => {
     const data = await loginApi({ username, password });
-    persist({ token: data.token, userId: data.userId, username: data.username });
-    return data;
-  }, [persist]);
+    return applyAuth(data);
+  }, [applyAuth]);
 
   const register = useCallback(async (username, email, password) => {
     const data = await registerApi({ username, email, password });
-    persist({ token: data.token, userId: data.userId, username: data.username });
-    return data;
-  }, [persist]);
+    return applyAuth(data);
+  }, [applyAuth]);
 
   const value = useMemo(
     () => ({ session, login, register, logout }),

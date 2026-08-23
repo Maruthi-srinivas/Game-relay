@@ -15,6 +15,7 @@ import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
 
@@ -122,6 +123,40 @@ public class MessageService {
             throw ApiException.badRequest("Message exceeds max length of " + maxMessageLength);
         }
         return trimmed;
+    }
+
+    @Transactional
+    public Message softDelete(UUID roomId, UUID userId, UUID messageId) {
+        Message message = requireOwnMessage(roomId, userId, messageId);
+        message.setDeletedAt(Instant.now());
+        return message;
+    }
+
+    @Transactional
+    public Message edit(UUID roomId, UUID userId, UUID messageId, String content) {
+        Message message = requireOwnMessage(roomId, userId, messageId);
+        if (message.getCreatedAt().isBefore(Instant.now().minusSeconds(300))) {
+            throw ApiException.forbidden("Edit window has expired");
+        }
+        message.setContent(validateContent(content));
+        message.setEditedAt(Instant.now());
+        return message;
+    }
+
+    private Message requireOwnMessage(UUID roomId, UUID userId, UUID messageId) {
+        roomService.requireMember(roomId, userId);
+        Message message = messageRepository.findById(messageId)
+                .orElseThrow(() -> ApiException.notFound("Message not found"));
+        if (!message.getRoomId().equals(roomId)) {
+            throw ApiException.notFound("Message not found");
+        }
+        if (message.getDeletedAt() != null) {
+            throw ApiException.notFound("Message not found");
+        }
+        if (!message.getSenderId().equals(userId) && !roomService.isModerator(roomId, userId)) {
+            throw ApiException.forbidden("Cannot modify this message");
+        }
+        return message;
     }
 
     public MessageResponse toResponse(Message message) {

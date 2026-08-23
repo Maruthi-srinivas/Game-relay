@@ -7,6 +7,7 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 
 public interface RoomMemberRepository extends JpaRepository<RoomMember, RoomMemberId> {
@@ -15,7 +16,9 @@ public interface RoomMemberRepository extends JpaRepository<RoomMember, RoomMemb
 
     long countByIdRoomId(UUID roomId);
 
-    List<RoomMember> findByIdRoomId(UUID roomId);
+    List<RoomMember> findByIdRoomIdOrderByJoinedAtAsc(UUID roomId);
+
+    Optional<RoomMember> findByIdRoomIdAndIdUserId(UUID roomId, UUID userId);
 
     @Query("""
             select m from RoomMember m

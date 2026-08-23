@@ -1,5 +1,8 @@
 package com.example.gamechat.chat.websocket;
 
+import io.micrometer.core.instrument.Gauge;
+import io.micrometer.core.instrument.MeterRegistry;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 import org.springframework.web.socket.TextMessage;
 import org.springframework.web.socket.WebSocketSession;
@@ -14,6 +17,7 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArraySet;
+import java.util.concurrent.atomic.AtomicInteger;
 
 @Component
 public class SessionRegistry {
@@ -27,13 +31,62 @@ public class SessionRegistry {
     private final Map<String, Instant> lastSeenBySession = new ConcurrentHashMap<>();
     private final Map<UUID, Set<WebSocketSession>> sessionsByRoom = new ConcurrentHashMap<>();
     private final Map<String, Set<UUID>> roomsBySession = new ConcurrentHashMap<>();
+    private final AtomicInteger authenticated = new AtomicInteger();
+
+    public SessionRegistry() {
+    }
+
+    @Autowired
+    public SessionRegistry(MeterRegistry meterRegistry) {
+        Gauge.builder("chat.ws.connections", authenticated, AtomicInteger::get).register(meterRegistry);
+    }
 
     public void register(WebSocketSession session, UUID userId, String username) {
+        boolean already = userBySession.containsKey(session.getId());
         sessions.put(session.getId(), session);
         userBySession.put(session.getId(), userId);
         usernameBySession.put(session.getId(), username);
         lastSeenBySession.put(session.getId(), Instant.now());
         roomsBySession.putIfAbsent(session.getId(), new CopyOnWriteArraySet<>());
+        if (!already) {
+            authenticated.incrementAndGet();
+        }
+    }
+
+    public void markPending(WebSocketSession session) {
+        sessions.put(session.getId(), session);
+        lastSeenBySession.put(session.getId(), Instant.now());
+        session.getAttributes().put("openedAt", Instant.now());
+    }
+
+    public boolean isRegistered(WebSocketSession session) {
+        return userBySession.containsKey(session.getId());
+    }
+
+    public boolean hasOtherSessions(UUID userId, WebSocketSession except) {
+        if (userId == null) {
+            return false;
+        }
+        for (Map.Entry<String, UUID> entry : userBySession.entrySet()) {
+            if (userId.equals(entry.getValue()) && (except == null || !entry.getKey().equals(except.getId()))) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    public List<WebSocketSession> pendingAuthExpired(Instant cutoff) {
+        List<WebSocketSession> expired = new ArrayList<>();
+        for (WebSocketSession session : sessions.values()) {
+            if (userBySession.containsKey(session.getId()) || !session.isOpen()) {
+                continue;
+            }
+            Object opened = session.getAttributes().get("openedAt");
+            if (opened instanceof Instant instant && instant.isBefore(cutoff)) {
+                expired.add(session);
+            }
+        }
+        return expired;
     }
 
     public void touch(WebSocketSession session) {
@@ -101,6 +154,9 @@ public class SessionRegistry {
         usernameBySession.remove(session.getId());
         lastSeenBySession.remove(session.getId());
         sessions.remove(session.getId());
+        if (userId != null) {
+            authenticated.decrementAndGet();
+        }
         if (rooms == null) {
             return;
         }

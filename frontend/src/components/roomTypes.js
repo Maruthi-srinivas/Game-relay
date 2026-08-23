@@ -1,4 +1,5 @@
-export const ROOM_TYPES = ["GAME_ROOM", "GLOBAL", "TEAM", "PARTY", "PRIVATE"];
+export const ROOM_TYPES = ["GAME_ROOM", "TEAM", "PARTY"];
+export const ALL_ROOM_TYPES = ["GAME_ROOM", "GLOBAL", "TEAM", "PARTY", "PRIVATE"];
 
 const LABELS = {
   GAME_ROOM: "Game",

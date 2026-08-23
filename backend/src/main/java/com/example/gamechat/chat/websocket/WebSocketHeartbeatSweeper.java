@@ -16,6 +16,7 @@ public class WebSocketHeartbeatSweeper {
 
     private static final Logger log = LoggerFactory.getLogger(WebSocketHeartbeatSweeper.class);
     private static final CloseStatus IDLE = new CloseStatus(4000, "idle timeout");
+    private static final CloseStatus AUTH_TIMEOUT = new CloseStatus(4001, "auth timeout");
 
     private final SessionRegistry sessionRegistry;
     private final long heartbeatTimeoutMs;
@@ -36,6 +37,18 @@ public class WebSocketHeartbeatSweeper {
                 session.close(IDLE);
             } catch (IOException ex) {
                 log.debug("Failed to close idle session {}", session.getId(), ex);
+            }
+        }
+    }
+
+    @Scheduled(fixedDelay = 1000)
+    public void closeUnauthenticated() {
+        Instant authCutoff = Instant.now().minusSeconds(3);
+        for (WebSocketSession session : sessionRegistry.pendingAuthExpired(authCutoff)) {
+            try {
+                session.close(AUTH_TIMEOUT);
+            } catch (IOException ex) {
+                log.debug("Failed to close unauthenticated session {}", session.getId(), ex);
             }
         }
     }

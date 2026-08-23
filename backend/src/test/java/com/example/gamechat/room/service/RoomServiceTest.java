@@ -3,12 +3,18 @@ package com.example.gamechat.room.service;
 import com.example.gamechat.auth.entity.User;
 import com.example.gamechat.auth.repository.UserRepository;
 import com.example.gamechat.common.exception.ApiException;
+import com.example.gamechat.chat.bus.ChatEventPublisher;
+import com.example.gamechat.kafka.ChatEventLog;
+import com.example.gamechat.chat.repository.MessageRepository;
 import com.example.gamechat.room.dto.CreateRoomRequest;
 import com.example.gamechat.room.dto.RoomResponse;
 import com.example.gamechat.room.entity.Room;
 import com.example.gamechat.room.entity.RoomMember;
+import com.example.gamechat.room.repository.ReportRepository;
+import com.example.gamechat.room.repository.RoomInviteRepository;
 import com.example.gamechat.room.repository.RoomMemberRepository;
 import com.example.gamechat.room.repository.RoomRepository;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -37,13 +43,34 @@ class RoomServiceTest {
     @Mock
     private UserRepository userRepository;
 
+    @Mock
+    private RoomInviteRepository roomInviteRepository;
+    @Mock
+    private ReportRepository reportRepository;
+    @Mock
+    private MessageRepository messageRepository;
+    @Mock
+    private ChatEventPublisher publisher;
+    @Mock
+    private ChatEventLog chatEventLog;
+
     private RoomService roomService;
     private UUID ownerId;
     private User owner;
 
     @BeforeEach
     void setUp() throws Exception {
-        roomService = new RoomService(roomRepository, roomMemberRepository, userRepository);
+        roomService = new RoomService(
+                roomRepository,
+                roomMemberRepository,
+                userRepository,
+                roomInviteRepository,
+                reportRepository,
+                messageRepository,
+                publisher,
+                chatEventLog,
+                new ObjectMapper()
+        );
         ownerId = UUID.randomUUID();
         owner = new User();
         owner.setId(ownerId);
@@ -75,7 +102,7 @@ class RoomServiceTest {
         when(roomRepository.findById(roomId)).thenReturn(Optional.of(room));
         when(roomMemberRepository.existsByIdRoomIdAndIdUserId(roomId, ownerId)).thenReturn(true);
 
-        RoomResponse response = roomService.join(roomId, ownerId);
+        RoomResponse response = roomService.join(roomId, ownerId, null);
 
         assertThat(response.id()).isEqualTo(roomId);
         verify(roomMemberRepository, never()).save(any());
@@ -91,7 +118,7 @@ class RoomServiceTest {
         when(roomMemberRepository.existsByIdRoomIdAndIdUserId(roomId, joinerId)).thenReturn(false);
         when(roomMemberRepository.countByIdRoomId(roomId)).thenReturn(2L);
 
-        assertThatThrownBy(() -> roomService.join(roomId, joinerId))
+        assertThatThrownBy(() -> roomService.join(roomId, joinerId, null))
                 .isInstanceOf(ApiException.class)
                 .extracting(ex -> ((ApiException) ex).getCode())
                 .isEqualTo("CONFLICT");

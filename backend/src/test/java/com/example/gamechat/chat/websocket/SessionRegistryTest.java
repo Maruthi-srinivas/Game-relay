@@ -54,6 +54,18 @@ class SessionRegistryTest {
     }
 
     @Test
+    void hasOtherSessionsIgnoresTheCurrentSocket() {
+        WebSocketSession first = session("a1");
+        WebSocketSession second = session("a2");
+        registry.register(first, alice, "alice");
+        assertThat(registry.hasOtherSessions(alice, first)).isFalse();
+        registry.register(second, alice, "alice");
+        assertThat(registry.hasOtherSessions(alice, first)).isTrue();
+        registry.removeSession(second);
+        assertThat(registry.hasOtherSessions(alice, first)).isFalse();
+    }
+
+    @Test
     void sessionsInRoomExceptOmitsCaller() {
         WebSocketSession aliceSession = session("a1");
         WebSocketSession bobSession = session("b1");

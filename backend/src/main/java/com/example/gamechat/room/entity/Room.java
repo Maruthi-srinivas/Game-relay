@@ -37,6 +37,9 @@ public class Room {
     @Column(name = "last_sequence", nullable = false)
     private long lastSequence;
 
+    @Column(name = "direct_key", length = 80)
+    private String directKey;
+
     @Column(name = "created_at", nullable = false)
     private Instant createdAt;
 
@@ -110,6 +113,14 @@ public class Room {
 
     public void setLastSequence(long lastSequence) {
         this.lastSequence = lastSequence;
+    }
+
+    public String getDirectKey() {
+        return directKey;
+    }
+
+    public void setDirectKey(String directKey) {
+        this.directKey = directKey;
     }
 
     public Instant getCreatedAt() {

@@ -7,6 +7,7 @@ public record MemberResponse(
         UUID userId,
         String username,
         String role,
-        Instant joinedAt
+        Instant joinedAt,
+        boolean muted
 ) {
 }

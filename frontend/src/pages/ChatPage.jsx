@@ -47,9 +47,14 @@ export default function ChatPage() {
       return;
     }
     try {
+      if (chat.room.type === "PARTY" || chat.room.type === "TEAM" || chat.room.type === "GAME_ROOM") {
+        const invite = await chat.invite(chat.room.id);
+        await navigator.clipboard.writeText(invite.code);
+        return;
+      }
       await navigator.clipboard.writeText(chat.room.id);
     } catch {
-      window.prompt("Invite id", chat.room.id);
+      window.prompt("Invite", chat.room.id);
     }
   }
 
@@ -95,17 +100,21 @@ export default function ChatPage() {
                       <span>cap {chat.room.maxMembers}</span>
                     </div>
                   </div>
-                  <div className="chat-head-actions">
-                    <button className="ghost" type="button" onClick={copyInvite}>
-                      Invite
-                    </button>
-                    <button className="danger" type="button" onClick={onLeave}>
-                      Leave
-                    </button>
-                  </div>
+                    <div className="chat-head-actions">
+                    {chat.room.type !== "GLOBAL" && chat.room.type !== "PRIVATE" ? (
+                      <button className="ghost" type="button" onClick={copyInvite}>
+                        Invite
+                      </button>
+                    ) : null}
+                    {chat.room.type !== "GLOBAL" ? (
+                      <button className="danger" type="button" onClick={onLeave}>
+                        Leave
+                      </button>
+                    ) : null}
+                    </div>
                 </div>
                 <MessageList />
-                <Composer key={chat.room.id} disabled={chat.wsState !== "open"} />
+                <Composer key={chat.room.id} disabled={chat.wsState !== "open" || chat.muted} />
               </>
             ) : (
               <div className="empty-main">

@@ -6,6 +6,8 @@ x-chat: &chat
       condition: service_healthy
     redis:
       condition: service_healthy
+    kafka:
+      condition: service_healthy
   environment:
     POSTGRES_HOST: postgres
     POSTGRES_PORT: 5432
@@ -15,9 +17,20 @@ x-chat: &chat
     REDIS_HOST: redis
     REDIS_PORT: 6379
     JWT_SECRET: ${JWT_SECRET:-change-me-to-a-long-random-secret-at-least-32-chars}
-    JWT_EXPIRATION: ${JWT_EXPIRATION:-86400000}
+    JWT_ACCESS_EXPIRATION: ${JWT_ACCESS_EXPIRATION:-900000}
+    JWT_REFRESH_EXPIRATION: ${JWT_REFRESH_EXPIRATION:-604800000}
+    JWT_REFRESH_COOKIE_SECURE: ${JWT_REFRESH_COOKIE_SECURE:-true}
+    KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+    KAFKA_ENABLED: "true"
 
 services:
+  certs-init:
+    image: alpine:3.21
+    volumes:
+      - ./certs:/certs
+      - ./certs/generate.sh:/generate.sh:ro
+    entrypoint: ["/bin/sh", "/generate.sh"]
+
   postgres:
     image: postgres:16-alpine
     environment:
@@ -42,6 +55,29 @@ services:
       timeout: 5s
       retries: 10
 
+  kafka:
+    image: apache/kafka:3.9.0
+    hostname: kafka
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      CLUSTER_ID: MkU3OEVBNTcwNTJENDM2Qk
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092"]
+      interval: 10s
+      timeout: 10s
+      retries: 12
+      start_period: 20s
+
   chat-a:
     <<: *chat
 
@@ -51,17 +87,64 @@ services:
   gateway:
     build: ./gateway
     depends_on:
-      - chat-a
-      - chat-b
+      certs-init:
+        condition: service_completed_successfully
+      chat-a:
+        condition: service_started
+      chat-b:
+        condition: service_started
+    volumes:
+      - ./certs:/etc/nginx/certs:ro
     ports:
-      - "8080:80"
+      - "8080:443"
 
   frontend:
     build: ./frontend
     depends_on:
-      - gateway
+      certs-init:
+        condition: service_completed_successfully
+      gateway:
+        condition: service_started
+    volumes:
+      - ./certs:/etc/nginx/certs:ro
     ports:
-      - "8081:80"
+      - "8081:443"
+
+  prometheus:
+    image: prom/prometheus:v3.2.1
+    volumes:
+      - ./observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    depends_on:
+      - chat-a
+      - chat-b
+    ports:
+      - "9090:9090"
+
+  grafana:
+    image: grafana/grafana:11.5.2
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+    volumes:
+      - ./observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./observability/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    depends_on:
+      - prometheus
+    ports:
+      - "3000:3000"
+
+  k6:
+    image: grafana/k6:0.57.0
+    profiles: ["loadtest"]
+    volumes:
+      - ./observability/k6:/scripts:ro
+    environment:
+      BASE_URL: https://gateway
+    command: ["run", "/scripts/chat.js"]
+    depends_on:
+      - gateway
 
 volumes:
   postgres_data:

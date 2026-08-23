@@ -1,8 +1,12 @@
 jwt:
   secret: test-secret-must-be-at-least-32-chars-long
   expiration-ms: 3600000
+  refresh-expiration-ms: 604800000
+  refresh-cookie-secure: false
 
 app:
+  kafka:
+    enabled: false
   chat:
     max-message-length: 2000
     sync-batch-size: 100
@@ -11,3 +15,16 @@ app:
     typing-idle-ms: 3000
     presence-ttl-ms: 90000
     presence-sweep-ms: 15000
+    send-rate-limit: 50
+    send-rate-window-seconds: 10
+    auth-rate-limit: 100
+    auth-rate-window-seconds: 60
+
+spring:
+  kafka:
+    listener:
+      auto-startup: false
+  autoconfigure:
+    exclude: org.springframework.boot.autoconfigure.kafka.KafkaAutoConfiguration
+  lifecycle:
+    timeout-per-shutdown-phase: 3s

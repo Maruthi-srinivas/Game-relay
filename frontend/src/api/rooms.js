@@ -8,12 +8,20 @@ export function createRoom(token, body) {
   return request(token, "POST", "/api/rooms", body);
 }
 
+export function createPrivateRoom(token, userId) {
+  return request(token, "POST", "/api/rooms/private", { userId });
+}
+
 export function getRoom(token, roomId) {
   return request(token, "GET", `/api/rooms/${roomId}`);
 }
 
-export function joinRoom(token, roomId) {
-  return request(token, "POST", `/api/rooms/${roomId}/join`);
+export function joinRoom(token, roomId, inviteCode) {
+  return request(token, "POST", `/api/rooms/${roomId}/join`, inviteCode ? { inviteCode } : {});
+}
+
+export function joinByCode(token, inviteCode) {
+  return request(token, "POST", "/api/rooms/join", { inviteCode });
 }
 
 export function leaveRoom(token, roomId) {
@@ -22,4 +30,24 @@ export function leaveRoom(token, roomId) {
 
 export function listMembers(token, roomId) {
   return request(token, "GET", `/api/rooms/${roomId}/members`);
+}
+
+export function createInvite(token, roomId) {
+  return request(token, "POST", `/api/rooms/${roomId}/invites`);
+}
+
+export function kickMember(token, roomId, userId) {
+  return request(token, "POST", `/api/rooms/${roomId}/members/${userId}/kick`);
+}
+
+export function muteMember(token, roomId, userId) {
+  return request(token, "POST", `/api/rooms/${roomId}/members/${userId}/mute`);
+}
+
+export function unmuteMember(token, roomId, userId) {
+  return request(token, "POST", `/api/rooms/${roomId}/members/${userId}/unmute`);
+}
+
+export function reportMember(token, roomId, body) {
+  return request(token, "POST", `/api/rooms/${roomId}/reports`, body);
 }

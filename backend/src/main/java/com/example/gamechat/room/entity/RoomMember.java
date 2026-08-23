@@ -36,6 +36,9 @@ public class RoomMember {
     @Column(name = "joined_at", nullable = false)
     private Instant joinedAt;
 
+    @Column(nullable = false)
+    private boolean muted;
+
     @PrePersist
     void prePersist() {
         if (joinedAt == null) {
@@ -81,5 +84,13 @@ public class RoomMember {
 
     public void setJoinedAt(Instant joinedAt) {
         this.joinedAt = joinedAt;
+    }
+
+    public boolean isMuted() {
+        return muted;
+    }
+
+    public void setMuted(boolean muted) {
+        this.muted = muted;
     }
 }

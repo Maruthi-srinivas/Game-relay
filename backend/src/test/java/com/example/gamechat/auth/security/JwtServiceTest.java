@@ -19,12 +19,22 @@ class JwtServiceTest {
         UserPrincipal principal = jwtService.parse(token);
         assertThat(principal.userId()).isEqualTo(userId);
         assertThat(principal.username()).isEqualTo("alice");
+        assertThat(principal.jti()).isNotBlank();
     }
 
     @Test
     void rejectsTamperedToken() {
         String token = jwtService.createToken(UUID.randomUUID(), "alice");
         assertThatThrownBy(() -> jwtService.parse(token + "x"))
+                .isInstanceOf(JwtException.class);
+    }
+
+    @Test
+    void rejectsExpiredToken() throws Exception {
+        JwtService shortLived = new JwtService("test-secret-must-be-at-least-32-chars-long", 1);
+        String token = shortLived.createToken(UUID.randomUUID(), "alice");
+        Thread.sleep(20);
+        assertThatThrownBy(() -> shortLived.parse(token))
                 .isInstanceOf(JwtException.class);
     }
 

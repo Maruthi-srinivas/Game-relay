@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { listMessages } from "../api/messages.js";
-import { createRoom, getRoom, joinRoom, leaveRoom, listMembers, listRooms } from "../api/rooms.js";
+import { createRoom, createInvite, createPrivateRoom, getRoom, joinByCode, joinRoom, kickMember, leaveRoom, listMembers, listRooms, muteMember, reportMember, unmuteMember } from "../api/rooms.js";
 import { connectChat } from "../ws/chatSocket.js";
 import { useAuth } from "../auth/AuthContext.jsx";
 
@@ -69,6 +69,8 @@ export function ChatProvider({ children }) {
   const [members, setMembers] = useState([]);
   const [messages, setMessages] = useState([]);
   const [onlineUserIds, setOnlineUserIds] = useState(() => new Set());
+  const [presenceByUser, setPresenceByUser] = useState({});
+  const [myStatus, setMyStatus] = useState("ONLINE");
   const [namesByUserId, setNamesByUserId] = useState({});
   const [typingByUser, setTypingByUser] = useState({});
   const [wsState, setWsState] = useState("closed");
@@ -254,7 +256,14 @@ export function ChatProvider({ children }) {
         if (event.roomId !== currentRoom) {
           break;
         }
-        setOnlineUserIds(new Set((event.online || []).map((row) => row.userId)));
+        setOnlineUserIds(new Set((event.online || []).filter((row) => row.status !== "OFFLINE").map((row) => row.userId)));
+        setPresenceByUser((prev) => {
+          const next = { ...prev };
+          for (const row of event.online || []) {
+            next[row.userId] = { status: row.status || "ONLINE", lastSeenAt: row.lastSeenAt };
+          }
+          return next;
+        });
         for (const row of event.online || []) {
           rememberName(row.userId, row.username);
         }
@@ -264,17 +273,42 @@ export function ChatProvider({ children }) {
           break;
         }
         rememberName(event.userId, event.username);
+        setPresenceByUser((prev) => ({
+          ...prev,
+          [event.userId]: { status: event.status, lastSeenAt: event.lastSeenAt },
+        }));
         setOnlineUserIds((prev) => {
           const next = new Set(prev);
-          if (event.status === "ONLINE") {
+          if (event.status && event.status !== "OFFLINE") {
             next.add(event.userId);
           } else {
             next.delete(event.userId);
           }
           return next;
         });
-        if (event.status === "ONLINE") {
+        if (event.status && event.status !== "OFFLINE") {
           refreshMembers(event.roomId).catch(() => {});
+        }
+        break;
+      case "USER_JOINED":
+      case "USER_LEFT":
+        if (event.roomId === currentRoom) {
+          refreshMembers(event.roomId).catch(() => {});
+          refreshRooms().catch(() => {});
+        }
+        break;
+      case "MESSAGE_DELETED":
+        if (event.roomId === currentRoom) {
+          setMessages((prev) =>
+            prev.map((msg) => (msg.messageId === event.messageId ? { ...msg, deleted: true, content: "Message deleted" } : msg))
+          );
+        }
+        break;
+      case "MESSAGE_EDITED":
+        if (event.roomId === currentRoom) {
+          setMessages((prev) =>
+            prev.map((msg) => (msg.messageId === event.messageId ? { ...msg, content: event.content, edited: true } : msg))
+          );
         }
         break;
       case "MESSAGE": {
@@ -343,7 +377,7 @@ export function ChatProvider({ children }) {
       default:
         break;
     }
-  }, [catchUp, ingestMessages, joinSocketRoom, rememberName, refreshMembers, userId]);
+  }, [catchUp, ingestMessages, joinSocketRoom, rememberName, refreshMembers, refreshRooms, userId]);
 
   const handleEventRef = useRef(handleEvent);
   handleEventRef.current = handleEvent;
@@ -423,6 +457,7 @@ export function ChatProvider({ children }) {
     setError(null);
     setTypingByUser({});
     setOnlineUserIds(new Set());
+    setPresenceByUser({});
     setMembers([]);
     setMessages([]);
     setHasMoreHistory(false);
@@ -462,12 +497,74 @@ export function ChatProvider({ children }) {
     return created;
   }, [token, refreshRooms]);
 
-  const join = useCallback(async (roomId) => {
+  const join = useCallback(async (roomIdOrCode, inviteCode) => {
     setError(null);
-    const joined = await joinRoom(token, roomId);
+    const value = String(roomIdOrCode || "").trim();
+    const looksUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
+    const joined = looksUuid
+      ? await joinRoom(token, value, inviteCode)
+      : await joinByCode(token, value);
     await refreshRooms();
     return joined;
   }, [token, refreshRooms]);
+
+  const startDm = useCallback(async (userId) => {
+    setError(null);
+    const created = await createPrivateRoom(token, userId);
+    await refreshRooms();
+    return created;
+  }, [token, refreshRooms]);
+
+  const invite = useCallback(async (roomId) => {
+    return createInvite(token, roomId);
+  }, [token]);
+
+  const kick = useCallback(async (userId) => {
+    const roomId = roomIdRef.current;
+    if (!roomId) {
+      return;
+    }
+    await kickMember(token, roomId, userId);
+    await refreshMembers(roomId);
+  }, [token, refreshMembers]);
+
+  const mute = useCallback(async (userId, nextMuted) => {
+    const roomId = roomIdRef.current;
+    if (!roomId) {
+      return;
+    }
+    if (nextMuted) {
+      await muteMember(token, roomId, userId);
+    } else {
+      await unmuteMember(token, roomId, userId);
+    }
+    await refreshMembers(roomId);
+  }, [token, refreshMembers]);
+
+  const report = useCallback(async (body) => {
+    const roomId = roomIdRef.current;
+    if (!roomId) {
+      return;
+    }
+    return reportMember(token, roomId, body);
+  }, [token]);
+
+  const setPresence = useCallback((status) => {
+    const socket = socketRef.current;
+    setMyStatus(status);
+    if (socket?.readyState === WebSocket.OPEN) {
+      socket.setPresence(status);
+    }
+  }, []);
+
+  const deleteChat = useCallback((messageId) => {
+    const roomId = roomIdRef.current;
+    const socket = socketRef.current;
+    if (!roomId || !socket || socket.readyState !== WebSocket.OPEN) {
+      return;
+    }
+    socket.deleteMessage(roomId, messageId);
+  }, []);
 
   const leave = useCallback(async (roomId) => {
     setError(null);
@@ -523,6 +620,8 @@ export function ChatProvider({ children }) {
 
   const clearError = useCallback(() => setError(null), []);
 
+  const muted = members.some((member) => member.userId === userId && member.muted);
+
   const value = useMemo(
     () => ({
       rooms,
@@ -530,6 +629,8 @@ export function ChatProvider({ children }) {
       members,
       messages,
       onlineUserIds,
+      presenceByUser,
+      myStatus,
       namesByUserId,
       typingByUser,
       wsState,
@@ -539,11 +640,19 @@ export function ChatProvider({ children }) {
       joinedRoomId,
       userId,
       username,
+      muted,
       refreshRooms,
       selectRoom,
       create,
       join,
       leave,
+      startDm,
+      invite,
+      kick,
+      mute,
+      report,
+      setPresence,
+      deleteChat,
       sendChat,
       sendTyping,
       loadOlderHistory,
@@ -556,6 +665,8 @@ export function ChatProvider({ children }) {
       members,
       messages,
       onlineUserIds,
+      presenceByUser,
+      myStatus,
       namesByUserId,
       typingByUser,
       wsState,
@@ -565,11 +676,19 @@ export function ChatProvider({ children }) {
       joinedRoomId,
       userId,
       username,
+      muted,
       refreshRooms,
       selectRoom,
       create,
       join,
       leave,
+      startDm,
+      invite,
+      kick,
+      mute,
+      report,
+      setPresence,
+      deleteChat,
       sendChat,
       sendTyping,
       loadOlderHistory,

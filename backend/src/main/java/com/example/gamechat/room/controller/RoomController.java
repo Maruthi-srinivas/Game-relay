@@ -2,8 +2,13 @@ package com.example.gamechat.room.controller;
 
 import com.example.gamechat.auth.security.UserPrincipal;
 import com.example.gamechat.chat.websocket.ChatWebSocketHandler;
+import com.example.gamechat.room.dto.CreatePrivateRequest;
 import com.example.gamechat.room.dto.CreateRoomRequest;
+import com.example.gamechat.room.dto.InviteResponse;
+import com.example.gamechat.room.dto.JoinRoomRequest;
 import com.example.gamechat.room.dto.MemberResponse;
+import com.example.gamechat.room.dto.ReportRequest;
+import com.example.gamechat.room.dto.ReportResponse;
 import com.example.gamechat.room.dto.RoomResponse;
 import com.example.gamechat.room.service.RoomService;
 import jakarta.validation.Valid;
@@ -41,9 +46,26 @@ public class RoomController {
         return roomService.create(principal.userId(), request);
     }
 
+    @PostMapping("/private")
+    @ResponseStatus(HttpStatus.CREATED)
+    public RoomResponse createPrivate(
+            @AuthenticationPrincipal UserPrincipal principal,
+            @Valid @RequestBody CreatePrivateRequest request
+    ) {
+        return roomService.createPrivate(principal.userId(), request);
+    }
+
     @GetMapping
     public List<RoomResponse> listMine(@AuthenticationPrincipal UserPrincipal principal) {
         return roomService.listForUser(principal.userId());
+    }
+
+    @PostMapping("/join")
+    public RoomResponse joinByCode(
+            @AuthenticationPrincipal UserPrincipal principal,
+            @Valid @RequestBody JoinRoomRequest request
+    ) {
+        return roomService.joinByCode(principal.userId(), request.inviteCode());
     }
 
     @GetMapping("/{roomId}")
@@ -57,9 +79,10 @@ public class RoomController {
     @PostMapping("/{roomId}/join")
     public RoomResponse join(
             @AuthenticationPrincipal UserPrincipal principal,
-            @PathVariable UUID roomId
+            @PathVariable UUID roomId,
+            @RequestBody(required = false) JoinRoomRequest request
     ) {
-        return roomService.join(roomId, principal.userId());
+        return roomService.join(roomId, principal.userId(), request);
     }
 
     @PostMapping("/{roomId}/leave")
@@ -70,6 +93,56 @@ public class RoomController {
     ) {
         roomService.leave(roomId, principal.userId());
         chatWebSocketHandler.dropUserFromRoom(principal.userId(), roomId);
+    }
+
+    @PostMapping("/{roomId}/invites")
+    @ResponseStatus(HttpStatus.CREATED)
+    public InviteResponse invite(
+            @AuthenticationPrincipal UserPrincipal principal,
+            @PathVariable UUID roomId
+    ) {
+        return roomService.createInvite(roomId, principal.userId());
+    }
+
+    @PostMapping("/{roomId}/members/{userId}/kick")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void kick(
+            @AuthenticationPrincipal UserPrincipal principal,
+            @PathVariable UUID roomId,
+            @PathVariable UUID userId
+    ) {
+        roomService.kick(roomId, principal.userId(), userId);
+        chatWebSocketHandler.dropUserFromRoom(userId, roomId);
+    }
+
+    @PostMapping("/{roomId}/members/{userId}/mute")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void mute(
+            @AuthenticationPrincipal UserPrincipal principal,
+            @PathVariable UUID roomId,
+            @PathVariable UUID userId
+    ) {
+        roomService.setMuted(roomId, principal.userId(), userId, true);
+    }
+
+    @PostMapping("/{roomId}/members/{userId}/unmute")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void unmute(
+            @AuthenticationPrincipal UserPrincipal principal,
+            @PathVariable UUID roomId,
+            @PathVariable UUID userId
+    ) {
+        roomService.setMuted(roomId, principal.userId(), userId, false);
+    }
+
+    @PostMapping("/{roomId}/reports")
+    @ResponseStatus(HttpStatus.CREATED)
+    public ReportResponse report(
+            @AuthenticationPrincipal UserPrincipal principal,
+            @PathVariable UUID roomId,
+            @Valid @RequestBody ReportRequest request
+    ) {
+        return roomService.report(roomId, principal.userId(), request);
     }
 
     @GetMapping("/{roomId}/members")

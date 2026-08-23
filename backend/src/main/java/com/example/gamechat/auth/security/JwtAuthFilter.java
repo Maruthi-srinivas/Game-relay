@@ -20,10 +20,12 @@ import java.util.List;
 public class JwtAuthFilter extends OncePerRequestFilter {
 
     private final JwtService jwtService;
+    private final TokenDenylist tokenDenylist;
     private final ObjectMapper objectMapper;
 
-    public JwtAuthFilter(JwtService jwtService, ObjectMapper objectMapper) {
+    public JwtAuthFilter(JwtService jwtService, TokenDenylist tokenDenylist, ObjectMapper objectMapper) {
         this.jwtService = jwtService;
+        this.tokenDenylist = tokenDenylist;
         this.objectMapper = objectMapper;
     }
 
@@ -37,6 +39,10 @@ public class JwtAuthFilter extends OncePerRequestFilter {
         if (token != null) {
             try {
                 UserPrincipal principal = jwtService.parse(token);
+                if (tokenDenylist.isDenied(principal.jti())) {
+                    writeUnauthorized(response);
+                    return;
+                }
                 var authentication = new UsernamePasswordAuthenticationToken(
                         principal,
                         null,

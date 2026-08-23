@@ -130,4 +130,12 @@ class PresenceServiceTest {
                 .containsExactly(alice);
         assertThat(shortTtl.reapExpired()).isEmpty();
     }
+
+    @Test
+    void setStatusUpdatesPerUserKeyAndRoomHash() {
+        presence.join(roomId, alice, "alice");
+        assertThat(presence.setStatus(alice, "alice", "IN_GAME")).isEqualTo("IN_GAME");
+        assertThat(presence.currentStatus(alice)).isEqualTo("IN_GAME");
+        assertThat(presence.onlineInRoom(roomId).getFirst().status()).isEqualTo("IN_GAME");
+    }
 }
